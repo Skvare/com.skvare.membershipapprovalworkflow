@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<extension key="com.skvare.membershipapprovalworkflow" type="module">
+  <file>membershipapprovalworkflow</file>
+  <name>Membership Approval Workflow</name>
+  <description>Adds a staff-driven approval workflow (Pending / Under Review / Approved-Pending Payment / Current) for memberships, replacing manual status overrides.</description>
+  <license>AGPL-3.0</license>
+  <authors>
+    <author>
+      <name>Sunil Pawar</name>
+      <email>sunil@skvare.com</email>
+      <role>Maintainer</role>
+    </author>
+  </authors>
+  <urls>
+    <url desc="Main Extension Page">https://github.com/Skvare/com.skvare.membershipapprovalworkflow</url>
+    <url desc="Documentation">https://github.com/Skvare/com.skvare.membershipapprovalworkflow</url>
+    <url desc="Support">https://github.com/Skvare/com.skvare.membershipapprovalworkflow</url>
+    <url desc="Licensing">https://www.gnu.org/licenses/agpl-3.0.html</url>
+  </urls>
+  <releaseDate>2026-08-27</releaseDate>
+  <version>1.0.0</version>
+  <develStage>alpha</develStage>
+  <compatibility>
+    <ver>6.16</ver>
+  </compatibility>
+  <comments>Manages membership approval workflow: Pending -&gt; Under Review / Approved-Pending Payment -&gt; Current.</comments>
+  <classloader>
+    <psr0 prefix="CRM_" path="."/>
+    <psr4 prefix="Civi\" path="Civi"/>
+  </classloader>
+  <civix>
+    <namespace>CRM/Membershipapprovalworkflow</namespace>
+    <format>25.10.2</format>
+    <angularModule>crmMembershipapprovalworkflow</angularModule>
+  </civix>
+  <mixins>
+    <mixin>mgd-php@2.0.0</mixin>
+    <mixin>setting-php@1.0.0</mixin>
+    <mixin>smarty@1.0.3</mixin>
+    <mixin>menu-xml@1.0.0</mixin>
+  </mixins>
+</extension>
