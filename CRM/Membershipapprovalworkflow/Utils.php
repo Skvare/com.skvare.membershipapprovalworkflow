@@ -18,6 +18,7 @@ class CRM_Membershipapprovalworkflow_Utils {
   const STATUS_APPROVED_PENDING_PAYMENT = 'Approved/Pending Payment';
   const STATUS_PENDING = 'Pending';
   const STATUS_CURRENT = 'Current';
+  const STATUS_GRACE = 'Grace';
   const STATUS_NEW = 'New';
 
   /**
@@ -28,6 +29,36 @@ class CRM_Membershipapprovalworkflow_Utils {
   const ACTION_APPROVED = 'approved';
 
   private static $statusIdCache = [];
+
+  /**
+   * Depth counter for membership updates initiated by this workflow.
+   *
+   * Core recursively creates/updates inherited memberships during the API
+   * call, so a counter protects the whole operation without passing a custom
+   * parameter through API validation.
+   *
+   * @var int
+   */
+  private static $workflowUpdateDepth = 0;
+
+  /**
+   * Per-request cache of each membership's status as of the FIRST time
+   * this extension observed it during the current request.
+   *
+   * A renewal often does two saves on the same membership row in one
+   * request - e.g. an intermediate save that lands on Pending while
+   * payment is processed, followed moments later by the save that
+   * finalizes dates and status. Both go through hook_civicrm_pre/
+   * hook_civicrm_alterCalculatedMembershipStatus, but by the second call
+   * the database already reflects the intermediate Pending write. Without
+   * this cache we'd misread that as "this is a workflow-owned Pending
+   * membership" and lock it back to Pending, blocking core's own renewal
+   * completion. Caching on first sight captures the true prior status
+   * (e.g. Current) before core's own writes can taint it.
+   *
+   * @var array<int,int>
+   */
+  private static $observedStatusIdCache = [];
 
   /**
    * @return int|NULL
@@ -68,6 +99,66 @@ class CRM_Membershipapprovalworkflow_Utils {
   }
 
   /**
+   * The approval workflow's status sequence, in display order, for the
+   * "where does this fit in the process" help text on the approval form
+   * (CRM_Membershipapprovalworkflow_Form_Approve). This is the full happy
+   * path, not the set of hops actually available from a given status -
+   * see getAllowedActions() for that; a membership can skip steps (e.g.
+   * Pending straight to Approved) but this is still the right thing to
+   * show staff as "the sequence".
+   *
+   * @return array
+   *   Status name => label, in workflow order.
+   */
+  public static function statusSequence() {
+    return [
+      self::STATUS_PENDING => E::ts('Pending'),
+      self::STATUS_UNDER_REVIEW => E::ts('Under Review'),
+      self::STATUS_APPROVED_PENDING_PAYMENT => E::ts('Approved/Pending Payment'),
+      self::STATUS_CURRENT => E::ts('Approved (Current)'),
+    ];
+  }
+
+  /**
+   * The membership's status_id as first observed during this request - see
+   * $observedStatusIdCache. Use this (never a fresh getFieldValue() call)
+   * anywhere the workflow needs to know whether a membership *was*
+   * protected, so a core-internal intermediate save can't masquerade as
+   * one.
+   */
+  private static function getObservedStatusId($membershipId) {
+    if (!array_key_exists($membershipId, self::$observedStatusIdCache)) {
+      self::$observedStatusIdCache[$membershipId] = (int) CRM_Core_DAO::getFieldValue(
+        'CRM_Member_DAO_Membership',
+        $membershipId,
+        'status_id'
+      );
+    }
+    return self::$observedStatusIdCache[$membershipId];
+  }
+
+  /**
+   * Seed the observed-status cache from a status_id the caller already has
+   * in hand (no DB read), if nothing has been cached for this membership
+   * yet. First observation wins - never overwrite.
+   *
+   * hook_civicrm_alterCalculatedMembershipStatus fires with the
+   * membership's pre-write status_id, ahead of CiviCRM's own status
+   * changes reaching the database (e.g. fixMembershipStatusBeforeRenew()
+   * calls the calculator this hook attaches to, then writes its result
+   * straight to the row via a raw DAO save() that bypasses
+   * hook_civicrm_pre entirely). Capturing the value here, while it's still
+   * trustworthy, is what lets preserveWorkflowStatusOnEdit() - which runs
+   * later, once the row may already be mutated - see the true prior
+   * status via getObservedStatusId() instead of a stale/tainted DB read.
+   */
+  private static function cacheObservedStatusId($membershipId, $statusId) {
+    if ($membershipId && $statusId && !array_key_exists($membershipId, self::$observedStatusIdCache)) {
+      self::$observedStatusIdCache[$membershipId] = (int) $statusId;
+    }
+  }
+
+  /**
    * Which approval actions are valid from the membership's current status.
    *
    * @param string $currentStatusName
@@ -83,6 +174,8 @@ class CRM_Membershipapprovalworkflow_Utils {
 
     switch ($currentStatusName) {
       case self::STATUS_PENDING:
+        unset($actions[self::ACTION_APPROVED_PENDING_PAYMENT]);
+        unset($actions[self::ACTION_APPROVED]);
         return $actions;
 
       case self::STATUS_UNDER_REVIEW:
@@ -112,6 +205,14 @@ class CRM_Membershipapprovalworkflow_Utils {
    */
   public static function applyAction($membershipId, $action) {
     $membership = civicrm_api3('Membership', 'getsingle', ['id' => $membershipId]);
+    $currentStatusName = self::getStatusNameById($membership['status_id']);
+    $allowedActions = self::getAllowedActions($currentStatusName);
+    if (!array_key_exists($action, $allowedActions)) {
+      throw new CRM_Core_Exception(E::ts(
+        'The action %1 is not available for a membership with status %2.',
+        [1 => $action, 2 => $currentStatusName]
+      ));
+    }
 
     $params = [
       'id' => $membershipId,
@@ -131,14 +232,78 @@ class CRM_Membershipapprovalworkflow_Utils {
 
       case self::ACTION_APPROVED:
         $params['status_id'] = self::getStatusIdByName(self::STATUS_CURRENT);
-        $params += self::datesForStart($membership, date('Y-m-d'));
+        $params += self::datesForStart($membership, CRM_Utils_Time::date('Y-m-d'));
         break;
 
       default:
         throw new CRM_Core_Exception(E::ts('Unknown membership approval action: %1', [1 => $action]));
     }
 
-    return civicrm_api3('Membership', 'create', $params)['values'][$membershipId] ?? [];
+    $result = self::runWorkflowUpdate(static function () use ($params, $membershipId) {
+      return civicrm_api3('Membership', 'create', $params)['values'][$membershipId] ?? [];
+    });
+
+    if ($currentStatusName === self::STATUS_UNDER_REVIEW
+      && in_array($action, [self::ACTION_APPROVED_PENDING_PAYMENT, self::ACTION_APPROVED], TRUE)
+    ) {
+      // Use $result (the just-saved record), not $membership (fetched
+      // before the update) - ACTION_APPROVED computes new start/end dates
+      // that only $result reflects.
+      self::sendUnderReviewApprovedNotification($result + $membership, self::getStatusNameById($params['status_id']));
+    }
+
+    return $result;
+  }
+
+  /**
+   * Email the member when staff move their membership out of "Under
+   * Review" into either outcome of a completed review - "Approved"
+   * (Current) or "Approved/Pending Payment". Both share one message
+   * template (workflow_name membershipapprovalworkflow_under_review_approved,
+   * registered in managed/MessageTemplate_UnderReviewApproved.mgd.php); the
+   * template branches on $newStatusName to word the two outcomes
+   * differently.
+   *
+   * Never lets a notification failure (missing/suppressed email, mail
+   * transport error) block the approval itself - the status change has
+   * already been committed by the time this runs.
+   */
+  private static function sendUnderReviewApprovedNotification(array $membership, $newStatusName) {
+    $contactId = $membership['contact_id'];
+    $toEmail = CRM_Contact_BAO_Contact::getPrimaryEmail($contactId, TRUE);
+    if (!$toEmail) {
+      Civi::log()->info('membershipapprovalworkflow: no deliverable primary email for contact {contactId}, skipping approval notification for membership {membershipId}.', [
+        'contactId' => $contactId,
+        'membershipId' => $membership['id'],
+      ]);
+      return;
+    }
+
+    $membershipTypeName = CRM_Core_DAO::getFieldValue(
+      'CRM_Member_DAO_MembershipType',
+      $membership['membership_type_id'],
+      'name'
+    );
+
+    try {
+      CRM_Core_BAO_MessageTemplate::sendTemplate([
+        'workflow' => 'membershipapprovalworkflow_under_review_approved',
+        'contactId' => $contactId,
+        'toEmail' => $toEmail,
+        'tplParams' => [
+          'membershipTypeName' => $membershipTypeName,
+          'newStatusName' => $newStatusName,
+          'membershipStartDate' => $membership['start_date'] ?? NULL,
+          'membershipEndDate' => $membership['end_date'] ?? NULL,
+        ],
+      ]);
+    }
+    catch (CRM_Core_Exception $e) {
+      Civi::log()->error('membershipapprovalworkflow: failed to send approval notification for membership {membershipId}: {message}', [
+        'membershipId' => $membership['id'],
+        'message' => $e->getMessage(),
+      ]);
+    }
   }
 
   /**
@@ -151,17 +316,27 @@ class CRM_Membershipapprovalworkflow_Utils {
    */
   public static function markCurrentOnPayment($membershipId, $paymentDate) {
     $membership = civicrm_api3('Membership', 'getsingle', ['id' => $membershipId]);
-
     $params = [
       'id' => $membershipId,
+      'contact_id' => $membership['contact_id'],
       'skipStatusCal' => TRUE,
       'is_override' => 0,
       'status_override_end_date' => '',
       'status_id' => self::getStatusIdByName(self::STATUS_CURRENT),
     ];
     $params += self::datesForStart($membership, $paymentDate);
-
-    civicrm_api3('Membership', 'create', $params);
+    self::runWorkflowUpdate(static function () use ($params) {
+      try {
+        $result = civicrm_api3('Membership', 'create', $params);
+      }
+      catch (CRM_Core_Exception $e) {
+        Civi::log()->error('membershipapprovalworkflow: failed to mark membership {membershipId} as Current on payment {paymentDate}: {message}', [
+          'membershipId' => $params['id'],
+          'paymentDate' => $params['start_date'],
+          'message' => $e->getMessage(),
+        ]);
+      }
+    });
   }
 
   /**
@@ -169,6 +344,11 @@ class CRM_Membershipapprovalworkflow_Utils {
    * new, non-inherited membership to start as Pending, per requirement 1,
    * regardless of whether it was submitted with immediate payment or
    * pay-later. Staff must then move it forward via the approval dropdown.
+   *
+   * Exception: if the contact already holds a Current/Grace membership of
+   * this type, this "create" is really a renewal landing in a new row
+   * (e.g. a type change) rather than a fresh signup - leave it to core's
+   * normal renewal handling instead of resetting it to Pending.
    */
   public static function forcePendingOnCreate(array &$params) {
     // Inherited memberships are managed by core's own
@@ -177,12 +357,9 @@ class CRM_Membershipapprovalworkflow_Utils {
     if (!empty($params['owner_membership_id'])) {
       return;
     }
-    // Something already made a deliberate, explicit status decision
-    // (e.g. core's own pay-later handling, an import, or this extension) -
-    // don't second-guess it.
-    if (!empty($params['skipStatusCal'])) {
-      return;
-    }
+    //if (self::isRenewalOfActiveMembership($params)) {
+    //  return;
+    //}
     $pendingId = self::getStatusIdByName(self::STATUS_PENDING);
     if (!$pendingId) {
       return;
@@ -192,6 +369,64 @@ class CRM_Membershipapprovalworkflow_Utils {
     // A Pending membership isn't active yet - it has no effective period.
     $params['start_date'] = '';
     $params['end_date'] = '';
+  }
+
+  /**
+   * True if the contact already holds a Current or Grace membership of the
+   * type being created - i.e. this new row is a renewal of an already
+   * active membership, not a fresh signup, so the approval workflow
+   * shouldn't touch it.
+   */
+  private static function isRenewalOfActiveMembership(array $params) {
+    if (empty($params['contact_id']) || empty($params['membership_type_id'])) {
+      return FALSE;
+    }
+    $activeStatusIds = array_values(array_filter([
+      self::getStatusIdByName(self::STATUS_CURRENT),
+      self::getStatusIdByName(self::STATUS_GRACE),
+    ]));
+    if (!$activeStatusIds) {
+      return FALSE;
+    }
+    return (bool) civicrm_api3('Membership', 'getcount', [
+      'contact_id' => $params['contact_id'],
+      'membership_type_id' => $params['membership_type_id'],
+      'status_id' => ['IN' => $activeStatusIds],
+    ]);
+  }
+
+  /**
+   * Prevent an ordinary edit/API call from moving a workflow-controlled
+   * membership out of its current status.
+   *
+   * Current and Grace are not protected statuses, so a renewal edit against
+   * a membership already in one of those states (the normal case - core
+   * extends the existing row's end_date) passes through untouched here;
+   * only Pending / Under Review / Approved-Pending-Payment are pinned.
+   *
+   * "Already in" is judged from getObservedStatusId(), not a fresh
+   * database read, so a renewal's own intermediate Pending save (see that
+   * method's docblock) can't be mistaken for a workflow-owned Pending.
+   */
+  public static function preserveWorkflowStatusOnEdit($membershipId, array &$params) {
+    if (!$membershipId || self::$workflowUpdateDepth > 0) {
+      return;
+    }
+
+    $currentStatusId = self::getObservedStatusId($membershipId);
+    $currentStatusName = self::getStatusNameById($currentStatusId);
+
+    if (!in_array($currentStatusName, self::protectedStatusNames(), TRUE)) {
+      return;
+    }
+    if ($currentStatusId !== ($params['status_id'] ?? NULL) && $currentStatusId == self::getStatusIdByName(self::STATUS_CURRENT)) {
+      return;
+    }
+
+    $params['status_id'] = $currentStatusId;
+    $params['skipStatusCal'] = TRUE;
+    $params['is_override'] = 0;
+    $params['status_override_end_date'] = '';
   }
 
   /**
@@ -221,22 +456,70 @@ class CRM_Membershipapprovalworkflow_Utils {
   }
 
   /**
-   * hook_civicrm_alterCalculatedMembershipStatus callback - keep "Under
-   * Review" / "Approved/Pending Payment" memberships in place. They are
-   * only ever meant to change via the approval dropdown or the payment
-   * hook above, never via CiviCRM's date-based status calculator (the
-   * nightly job, membership create/edit, or the renewal/order-complete
-   * flow all funnel through here).
+   * hook_civicrm_alterCalculatedMembershipStatus callback.
+   *
+   * Two jobs:
+   *
+   * 1. Keep "Pending" / "Under Review" / "Approved/Pending Payment"
+   *    memberships in place. They are only ever meant to change via the
+   *    approval dropdown or the payment hook above, never via CiviCRM's
+   *    date-based status calculator (the nightly job, membership
+   *    create/edit, or the renewal/order-complete flow all funnel through
+   *    here).
+   *
+   * 2. Block the calculator from ever demoting an already Current/Grace
+   *    membership to Pending. CRM_Member_BAO_Membership::
+   *    fixMembershipStatusBeforeRenew() (called from
+   *    Civi\Membership\OrderCompleteSubscriber during renewal payment
+   *    completion) calls this calculator and then writes its result
+   *    straight to the database via a raw DAO save() - which does NOT
+   *    fire hook_civicrm_pre, so preserveWorkflowStatusOnEdit() never gets
+   *    a chance to stop it. This hook is the only interception point for
+   *    that write. A genuinely active membership should never calculate
+   *    to Pending (it's an is_admin status, excluded from date-based
+   *    calculation by core's own excludeIsAdmin flag on this code path),
+   *    so seeing it here means core's renewal bookkeeping produced a
+   *    bogus target - restore the membership's observed status instead of
+   *    letting that persist.
    */
   public static function preserveProtectedStatus(array &$membershipStatus, array $membership) {
     $membershipId = $membership['id'] ?? NULL;
     if (!$membershipId) {
       return;
     }
-    $currentStatusId = CRM_Core_DAO::getFieldValue('CRM_Member_DAO_Membership', $membershipId, 'status_id');
-    $currentStatusName = self::getStatusNameById($currentStatusId);
-    if (in_array($currentStatusName, [self::STATUS_UNDER_REVIEW, self::STATUS_APPROVED_PENDING_PAYMENT], TRUE)) {
-      $membershipStatus = ['id' => $currentStatusId, 'name' => $currentStatusName];
+    // $membership['status_id'] is the row's status as of just before this
+    // calculation - seed the cache from it now, before any core-internal
+    // write can taint what a later getObservedStatusId() read would see.
+    self::cacheObservedStatusId($membershipId, $membership['status_id'] ?? NULL);
+
+    $observedStatusId = self::getObservedStatusId($membershipId);
+    $observedStatusName = self::getStatusNameById($observedStatusId);
+
+    if (in_array($observedStatusName, self::protectedStatusNames(), TRUE)) {
+      $membershipStatus = ['id' => $observedStatusId, 'name' => $observedStatusName];
+      return;
+    }
+
+    $calculatedStatusName = $membershipStatus['name'] ?? NULL;
+    if ($calculatedStatusName === self::STATUS_PENDING && $observedStatusName !== self::STATUS_PENDING) {
+      $membershipStatus = ['id' => $observedStatusId, 'name' => $observedStatusName];
+    }
+  }
+
+  /**
+   * Run a membership update which is authorized by this workflow.
+   *
+   * @template T
+   * @param callable(): T $callback
+   * @return T
+   */
+  private static function runWorkflowUpdate(callable $callback) {
+    self::$workflowUpdateDepth++;
+    try {
+      return $callback();
+    }
+    finally {
+      self::$workflowUpdateDepth--;
     }
   }
 

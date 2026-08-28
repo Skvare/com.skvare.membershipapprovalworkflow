@@ -61,12 +61,27 @@ function membershipapprovalworkflow_civicrm_uninstall(): void {
  *
  * Adds a "Membership Approval" action to the row-action menu on the
  * contact's Membership tab, deliberately separate from the core Membership
- * edit form (requirement 3).
+ * edit form (requirement 3). Only offered on the primary membership - an
+ * inherited membership (owner_membership_id set) tracks its owner's
+ * status automatically via core's own createRelatedMemberships(), so
+ * approving it directly would be meaningless.
  *
  * @link https://docs.civicrm.org/dev/en/latest/hooks/hook_civicrm_links/
  */
 function membershipapprovalworkflow_civicrm_links($op, $objectName, $objectId, &$links, &$mask, &$values) {
-  if ($op === 'membership.tab.row' && $objectName === 'Membership') {
+  $allowRegions = ['membership.selector.row', 'membership.tab.row'];
+  if (in_array($op, $allowRegions) && $objectName === 'Membership') {
+    $ownerMembershipId = CRM_Core_DAO::getFieldValue('CRM_Member_DAO_Membership', $objectId, 'owner_membership_id');
+    if ($ownerMembershipId) {
+      return;
+    }
+
+    $statusId = CRM_Core_DAO::getFieldValue('CRM_Member_DAO_Membership', $objectId, 'status_id');
+    $statusName = CRM_Membershipapprovalworkflow_Utils::getStatusNameById($statusId);
+    if (!CRM_Membershipapprovalworkflow_Utils::getAllowedActions($statusName)) {
+      return;
+    }
+
     $links[] = [
       'name' => E::ts('Membership Approval'),
       'url' => 'civicrm/membership/approve',
@@ -88,8 +103,34 @@ function membershipapprovalworkflow_civicrm_pre($op, $objectName, $id, &$params)
   if ($objectName === 'Membership' && $op === 'create') {
     CRM_Membershipapprovalworkflow_Utils::forcePendingOnCreate($params);
   }
+  elseif ($objectName === 'Membership' && $op === 'edit') {
+    CRM_Membershipapprovalworkflow_Utils::preserveWorkflowStatusOnEdit($id, $params);
+  }
   elseif ($objectName === 'Contribution' && $id && !empty($params['prevContribution'])) {
     Civi::$statics['membershipapprovalworkflow']['prevContributionStatus'][$id] = $params['prevContribution']->contribution_status_id;
+  }
+}
+
+/**
+ * Implements hook_civicrm_buildForm().
+ *
+ * Membership status is controlled by the dedicated approval action, not by
+ * the standard membership add/edit form.
+ *
+ * @link https://docs.civicrm.org/dev/en/latest/hooks/hook_civicrm_buildForm/
+ */
+function membershipapprovalworkflow_civicrm_buildForm($formName, &$form): void {
+  if ($formName !== 'CRM_Member_Form_Membership') {
+    return;
+  }
+
+  $fields = array_filter([
+    $form->elementExists('status_id') ? 'status_id' : NULL,
+    $form->elementExists('is_override') ? 'is_override' : NULL,
+    $form->elementExists('status_override_end_date') ? 'status_override_end_date' : NULL,
+  ]);
+  if ($fields) {
+    $form->freeze($fields);
   }
 }
 

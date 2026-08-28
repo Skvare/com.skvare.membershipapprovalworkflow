@@ -29,6 +29,8 @@ class CRM_Membershipapprovalworkflow_Form_Approve extends CRM_Core_Form {
     $this->assign('currentStatusLabel', CRM_Core_PseudoConstant::getLabel('CRM_Member_BAO_Membership', 'status_id', $membership['status_id']));
     $this->assign('contactId', $this->contactId);
     $this->assign('hasActions', !empty($this->allowedActions));
+    $this->assign('statusSequence', CRM_Membershipapprovalworkflow_Utils::statusSequence());
+    $this->assign('currentStatusName', $this->currentStatusName);
 
     CRM_Utils_System::setTitle(E::ts('Membership Approval'));
   }
@@ -68,11 +70,6 @@ class CRM_Membershipapprovalworkflow_Form_Approve extends CRM_Core_Form {
       CRM_Membershipapprovalworkflow_Utils::applyAction($this->membershipId, $values['approval_action']);
       CRM_Core_Session::setStatus(E::ts('Membership status updated.'), E::ts('Saved'), 'success');
     }
-    CRM_Utils_System::redirect(CRM_Utils_System::url('civicrm/contact/view', [
-      'reset' => 1,
-      'cid' => $this->contactId,
-      'selectedChild' => 'member',
-    ]));
   }
 
 }
