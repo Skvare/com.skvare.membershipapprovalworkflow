@@ -21,6 +21,7 @@ class CRM_Membershipapprovalworkflow_Utils {
   const STATUS_CURRENT = 'Current';
   const STATUS_GRACE = 'Grace';
   const STATUS_NEW = 'New';
+  const STATUS_EXPIRED = 'Expired';
 
   /**
    * Action keys used by the approval dropdown, in display order.
@@ -554,10 +555,16 @@ class CRM_Membershipapprovalworkflow_Utils {
    *    Current with start date = payment date (requirements 2D / 5).
    *  - if that membership is still the initial "Pending" (i.e. payment
    *    was made at signup rather than pay-later, before staff have
-   *    reviewed it), move it to "Pending Approval/Payment Received" so
-   *    staff can see payment has already been received. A pay-later
-   *    membership whose contribution is never completed is unaffected
-   *    and stays Pending, per existing behavior.
+   *    reviewed it):
+   *    - and it's a renewal of an Expired membership of the same type for
+   *      the same contact (see isRenewalOfExpiredMembership()) - move it
+   *      straight to Current. The contact already held this membership
+   *      before; there's nothing new here for staff to review.
+   *    - otherwise (a genuinely new application) - move it to "Pending
+   *      Approval/Payment Received" so staff can see payment has already
+   *      been received.
+   *    A pay-later membership whose contribution is never completed is
+   *    unaffected and stays Pending, per existing behavior.
    */
   public static function handleContributionCompleted($contributionId) {
     $paymentDate = civicrm_api3('Contribution', 'getvalue', [
@@ -578,9 +585,55 @@ class CRM_Membershipapprovalworkflow_Utils {
         self::markCurrentOnPayment($membershipId, $paymentDate);
       }
       elseif ($statusName === self::STATUS_PENDING) {
-        self::markPendingApprovalPaymentReceived($membershipId);
+        if (self::isRenewalOfExpiredMembership($membershipId)) {
+          // Core creates a brand-new membership row for a renewal of an
+          // Expired membership (rather than editing the old row), so this
+          // lands here indistinguishable from a fresh signup at first
+          // glance. It isn't one - the contact already held this
+          // membership type before, so there's nothing new to review.
+          // Skip the approval queue entirely and activate it directly.
+          self::markCurrentOnPayment($membershipId, $paymentDate);
+        }
+        else {
+          self::markPendingApprovalPaymentReceived($membershipId);
+        }
       }
     }
+  }
+
+  /**
+   * True if this membership is a renewal of an Expired membership of the
+   * same type for the same contact - i.e. the contact already held this
+   * membership type before, just not continuously, rather than this being
+   * a genuinely new application.
+   *
+   * Needed because core (as configured on this site) creates a brand-new
+   * membership row for a renewal of an Expired membership instead of
+   * editing the old row, so `handleContributionCompleted()` can't tell a
+   * true fresh signup apart from this kind of renewal just by looking at
+   * the membership's own `id`/status history - it has to check for a
+   * sibling row.
+   *
+   * @param int $membershipId
+   * @return bool
+   */
+  private static function isRenewalOfExpiredMembership($membershipId) {
+    $expiredStatusId = self::getStatusIdByName(self::STATUS_EXPIRED);
+    if (!$expiredStatusId) {
+      return FALSE;
+    }
+
+    $membership = civicrm_api3('Membership', 'getsingle', [
+      'id' => $membershipId,
+      'return' => ['contact_id', 'membership_type_id'],
+    ]);
+
+    return (bool) civicrm_api3('Membership', 'getcount', [
+      'id' => ['!=' => $membershipId],
+      'contact_id' => $membership['contact_id'],
+      'membership_type_id' => $membership['membership_type_id'],
+      'status_id' => $expiredStatusId,
+    ]);
   }
 
   /**
