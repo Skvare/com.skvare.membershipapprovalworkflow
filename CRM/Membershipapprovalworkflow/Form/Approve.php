@@ -24,12 +24,12 @@ class CRM_Membershipapprovalworkflow_Form_Approve extends CRM_Core_Form {
 
     $membership = civicrm_api3('Membership', 'getsingle', ['id' => $this->membershipId]);
     $this->currentStatusName = CRM_Membershipapprovalworkflow_Utils::getStatusNameById($membership['status_id']);
-    $this->allowedActions = CRM_Membershipapprovalworkflow_Utils::getAllowedActions($this->currentStatusName);
-
+    $paymentReceived = CRM_Membershipapprovalworkflow_Utils::hasReceivedPayment($this->membershipId);
+    $this->allowedActions = CRM_Membershipapprovalworkflow_Utils::getAllowedActions($this->currentStatusName, $paymentReceived);
     $this->assign('currentStatusLabel', CRM_Core_PseudoConstant::getLabel('CRM_Member_BAO_Membership', 'status_id', $membership['status_id']));
     $this->assign('contactId', $this->contactId);
     $this->assign('hasActions', !empty($this->allowedActions));
-    $this->assign('statusSequence', CRM_Membershipapprovalworkflow_Utils::statusSequence());
+    $this->assign('statusSequence', CRM_Membershipapprovalworkflow_Utils::statusSequence($paymentReceived));
     $this->assign('currentStatusName', $this->currentStatusName);
 
     CRM_Utils_System::setTitle(E::ts('Membership Approval'));

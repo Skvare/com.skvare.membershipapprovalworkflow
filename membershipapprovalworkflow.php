@@ -138,8 +138,11 @@ function membershipapprovalworkflow_civicrm_buildForm($formName, &$form): void {
  * Implements hook_civicrm_post().
  *
  * Requirements 2D / 5: when a contribution linked to a membership becomes
- * Completed, and that membership is "Approved/Pending Payment", move it to
- * Current with start date = payment date.
+ * Completed: if that membership is "Approved/Pending Payment", move it to
+ * Current with start date = payment date; if it is still the initial
+ * "Pending" (payment made at signup instead of pay-later), move it to
+ * "Pending Approval/Payment Received" instead. See
+ * CRM_Membershipapprovalworkflow_Utils::handleContributionCompleted().
  *
  * @link https://docs.civicrm.org/dev/en/latest/hooks/hook_civicrm_post/
  */

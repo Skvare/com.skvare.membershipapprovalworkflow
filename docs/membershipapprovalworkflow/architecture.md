@@ -61,15 +61,16 @@ core's own `createRelatedMemberships()` manages those.
 
 Calls `Utils::preserveWorkflowStatusOnEdit()`. If the membership's
 *observed* status (see `renewal-edge-cases.md` for what "observed" means
-and why it's not a plain database read) is one of the three
-workflow-owned statuses (Pending, Under Review, Approved/Pending Payment),
+and why it's not a plain database read) is one of the four
+workflow-owned statuses (`Utils::protectedStatusNames()`: Pending, Pending
+Approval/Payment Received, Under Review, Approved/Pending Payment),
 this pins `status_id` back to that value and forces `skipStatusCal =
 TRUE`, `is_override = 0` - i.e. nothing except this extension's own
-`applyAction()`/`markCurrentOnPayment()` (which bypass this via the
-`$workflowUpdateDepth` guard) can move a membership out of those three
-statuses. Current and Grace are **not** workflow-owned, so an edit against
-a Current/Grace membership (a normal renewal extending `end_date`) passes
-through untouched.
+`applyAction()`/`markCurrentOnPayment()`/`markPendingApprovalPaymentReceived()`
+(which bypass this via the `$workflowUpdateDepth` guard) can move a
+membership out of those four statuses. Current and Grace are **not**
+workflow-owned, so an edit against a Current/Grace membership (a normal
+renewal extending `end_date`) passes through untouched.
 
 ### `hook_civicrm_pre` (Contribution)
 
@@ -84,9 +85,14 @@ was already Completed being saved again (e.g. an unrelated field edit).
 If the contribution's new status is Completed, and it *wasn't* already
 Completed before this save (per the stashed value above), calls
 `Utils::handleContributionCompleted()`. That finds every membership linked
-to the contribution via `MembershipPayment`, and for any of them currently
-`Approved/Pending Payment`, calls `Utils::markCurrentOnPayment()` - moving
-it to Current with `start_date` = the contribution's `receive_date`.
+to the contribution via `MembershipPayment` and, depending on that
+membership's current status:
+
+- `Approved/Pending Payment` -> `Utils::markCurrentOnPayment()` moves it to
+  Current with `start_date` = the contribution's `receive_date`.
+- `Pending` (still unreviewed) -> `Utils::markPendingApprovalPaymentReceived()`
+  moves it to `Pending Approval/Payment Received` (status only, no dates
+  yet - it still hasn't been approved).
 
 ### `hook_civicrm_buildForm`
 
@@ -119,10 +125,11 @@ Standard civix boilerplate; no custom logic.
 `xml/Menu/membershipapprovalworkflow.xml`, requires the `edit memberships`
 permission) is handled by `CRM_Membershipapprovalworkflow_Form_Approve`:
 
-- `preProcess()` loads the membership, computes `getAllowedActions()` for
-  its current status, and assigns display data to the template (including
-  `statusSequence()` for the workflow-sequence help text - see
-  `workflow-states.md`).
+- `preProcess()` loads the membership, computes `hasReceivedPayment()`
+  once, and passes it into both `getAllowedActions()` (for its current
+  status) and `statusSequence()` (for the workflow-sequence help text) so
+  the dropdown and the help text agree on whether payment is already in -
+  see `workflow-states.md`.
 - `buildQuickForm()` adds the `approval_action` select (only if there are
   allowed actions) and a Back link.
 - `postProcess()` calls `Utils::applyAction($membershipId,

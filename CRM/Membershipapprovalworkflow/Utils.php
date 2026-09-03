@@ -17,6 +17,7 @@ class CRM_Membershipapprovalworkflow_Utils {
   const STATUS_UNDER_REVIEW = 'Under Review';
   const STATUS_APPROVED_PENDING_PAYMENT = 'Approved/Pending Payment';
   const STATUS_PENDING = 'Pending';
+  const STATUS_PENDING_APPROVAL_PAYMENT_RECEIVED = 'Pending Approval/Payment Received';
   const STATUS_CURRENT = 'Current';
   const STATUS_GRACE = 'Grace';
   const STATUS_NEW = 'New';
@@ -95,7 +96,12 @@ class CRM_Membershipapprovalworkflow_Utils {
    * move a membership out of.
    */
   public static function protectedStatusNames() {
-    return [self::STATUS_PENDING, self::STATUS_UNDER_REVIEW, self::STATUS_APPROVED_PENDING_PAYMENT];
+    return [
+      self::STATUS_PENDING,
+      self::STATUS_PENDING_APPROVAL_PAYMENT_RECEIVED,
+      self::STATUS_UNDER_REVIEW,
+      self::STATUS_APPROVED_PENDING_PAYMENT,
+    ];
   }
 
   /**
@@ -103,20 +109,82 @@ class CRM_Membershipapprovalworkflow_Utils {
    * "where does this fit in the process" help text on the approval form
    * (CRM_Membershipapprovalworkflow_Form_Approve). This is the full happy
    * path, not the set of hops actually available from a given status -
-   * see getAllowedActions() for that; a membership can skip steps (e.g.
-   * Pending straight to Approved) but this is still the right thing to
-   * show staff as "the sequence".
+   * see getAllowedActions() for that (which, from "Under Review", offers
+   * only one of "Approved/Pending Payment" or "Approved", never both,
+   * depending on whether payment is already in) - but this is still the
+   * right thing to show staff as "the sequence".
    *
+   * Each entry is a "step" - a status name => label map of one or more
+   * alternative statuses that occupy the same point in the sequence (e.g.
+   * "Pending" vs "Pending Approval/Payment Received", depending on whether
+   * payment was received before staff review). A step with more than one
+   * alternative is rendered as "A or B" rather than as separate arrows,
+   * since a membership is only ever in one of them at a time.
+   *
+   * The "Approved/Pending Payment" step only applies when payment for this
+   * membership hasn't been received yet - if it has (see
+   * hasReceivedPayment()), that step is skipped entirely and the sequence
+   * goes straight from "Under Review" to "Approved (Current)", since that's
+   * genuinely the only sensible next hop for a membership that's already
+   * been paid.
+   *
+   * @param bool $paymentReceived
+   *   Whether payment for this membership has already been received - see
+   *   hasReceivedPayment().
    * @return array
-   *   Status name => label, in workflow order.
+   *   List of steps, each a status name => label map.
    */
-  public static function statusSequence() {
-    return [
-      self::STATUS_PENDING => E::ts('Pending'),
-      self::STATUS_UNDER_REVIEW => E::ts('Under Review'),
-      self::STATUS_APPROVED_PENDING_PAYMENT => E::ts('Approved/Pending Payment'),
-      self::STATUS_CURRENT => E::ts('Approved (Current)'),
+  public static function statusSequence($paymentReceived = FALSE) {
+    $steps = [
+      [
+        self::STATUS_PENDING => E::ts('Pending'),
+        self::STATUS_PENDING_APPROVAL_PAYMENT_RECEIVED => E::ts('Pending Approval/Payment Received'),
+      ],
+      [self::STATUS_UNDER_REVIEW => E::ts('Under Review')],
     ];
+    if (!$paymentReceived) {
+      $steps[] = [self::STATUS_APPROVED_PENDING_PAYMENT => E::ts('Approved/Pending Payment')];
+    }
+    $steps[] = [self::STATUS_CURRENT => E::ts('Approved (Current)')];
+    return $steps;
+  }
+
+  /**
+   * Whether payment for this membership's current pending cycle has
+   * already been received, based on the most recently received
+   * Contribution linked to it via MembershipPayment.
+   *
+   * Deliberately looks at the MOST RECENT linked contribution, not "was
+   * any linked contribution ever completed" - a membership row is reused
+   * across renewal cycles, so an old completed contribution from a prior
+   * period would otherwise produce a false positive for the membership's
+   * current (still pending) cycle.
+   *
+   * @param int $membershipId
+   * @return bool
+   */
+  public static function hasReceivedPayment($membershipId) {
+    $membershipPayments = civicrm_api3('MembershipPayment', 'get', [
+      'membership_id' => $membershipId,
+      'return' => ['contribution_id'],
+    ])['values'];
+    if (!$membershipPayments) {
+      return FALSE;
+    }
+
+    $contributionIds = array_column($membershipPayments, 'contribution_id');
+    $latestContribution = civicrm_api3('Contribution', 'get', [
+      'id' => ['IN' => $contributionIds],
+      'return' => ['contribution_status_id'],
+      'options' => ['sort' => 'receive_date DESC', 'limit' => 1],
+    ])['values'];
+    if (!$latestContribution) {
+      return FALSE;
+    }
+
+    $completedStatusId = CRM_Core_PseudoConstant::getKey('CRM_Contribute_BAO_Contribution', 'contribution_status_id', 'Completed');
+    $latestStatusId = reset($latestContribution)['contribution_status_id'];
+    return (int) $latestStatusId === (int) $completedStatusId;
   }
 
   /**
@@ -161,11 +229,22 @@ class CRM_Membershipapprovalworkflow_Utils {
   /**
    * Which approval actions are valid from the membership's current status.
    *
+   * Mirrors statusSequence()'s treatment of payment: from "Under Review",
+   * exactly one of "Approved/Pending Payment" or "Approved" is offered -
+   * never both - decided by hasReceivedPayment(): payment already in ->
+   * offer "Approved" only (no reason to route through a "pending payment"
+   * holding status for money that's already there); no payment yet ->
+   * offer "Approved/Pending Payment" only (staff can't activate a
+   * membership nothing has been paid for).
+   *
    * @param string $currentStatusName
+   * @param bool $paymentReceived
+   *   Whether payment for this membership has already been received - see
+   *   hasReceivedPayment().
    * @return array
    *   Action key => label.
    */
-  public static function getAllowedActions($currentStatusName) {
+  public static function getAllowedActions($currentStatusName, $paymentReceived = FALSE) {
     $actions = [
       self::ACTION_UNDER_REVIEW => E::ts('Under Review'),
       self::ACTION_APPROVED_PENDING_PAYMENT => E::ts('Approved/Pending Payment'),
@@ -174,12 +253,19 @@ class CRM_Membershipapprovalworkflow_Utils {
 
     switch ($currentStatusName) {
       case self::STATUS_PENDING:
+      case self::STATUS_PENDING_APPROVAL_PAYMENT_RECEIVED:
         unset($actions[self::ACTION_APPROVED_PENDING_PAYMENT]);
         unset($actions[self::ACTION_APPROVED]);
         return $actions;
 
       case self::STATUS_UNDER_REVIEW:
         unset($actions[self::ACTION_UNDER_REVIEW]);
+        if ($paymentReceived) {
+          unset($actions[self::ACTION_APPROVED_PENDING_PAYMENT]);
+        }
+        else {
+          unset($actions[self::ACTION_APPROVED]);
+        }
         return $actions;
 
       case self::STATUS_APPROVED_PENDING_PAYMENT:
@@ -206,7 +292,7 @@ class CRM_Membershipapprovalworkflow_Utils {
   public static function applyAction($membershipId, $action) {
     $membership = civicrm_api3('Membership', 'getsingle', ['id' => $membershipId]);
     $currentStatusName = self::getStatusNameById($membership['status_id']);
-    $allowedActions = self::getAllowedActions($currentStatusName);
+    $allowedActions = self::getAllowedActions($currentStatusName, self::hasReceivedPayment($membershipId));
     if (!array_key_exists($action, $allowedActions)) {
       throw new CRM_Core_Exception(E::ts(
         'The action %1 is not available for a membership with status %2.',
@@ -340,6 +426,38 @@ class CRM_Membershipapprovalworkflow_Utils {
   }
 
   /**
+   * Move a freshly created "Pending" membership to "Pending Approval/
+   * Payment Received" once its linked payment is received while it is
+   * still awaiting staff review - i.e. the member paid at signup instead
+   * of choosing pay-later. Only the status changes; there is no start/end
+   * date yet since the membership still hasn't been approved.
+   *
+   * @param int $membershipId
+   */
+  public static function markPendingApprovalPaymentReceived($membershipId) {
+    $membership = civicrm_api3('Membership', 'getsingle', ['id' => $membershipId]);
+    $params = [
+      'id' => $membershipId,
+      'contact_id' => $membership['contact_id'],
+      'skipStatusCal' => TRUE,
+      'is_override' => 0,
+      'status_override_end_date' => '',
+      'status_id' => self::getStatusIdByName(self::STATUS_PENDING_APPROVAL_PAYMENT_RECEIVED),
+    ];
+    self::runWorkflowUpdate(static function () use ($params) {
+      try {
+        civicrm_api3('Membership', 'create', $params);
+      }
+      catch (CRM_Core_Exception $e) {
+        Civi::log()->error('membershipapprovalworkflow: failed to mark membership {membershipId} as Pending Approval/Payment Received: {message}', [
+          'membershipId' => $params['id'],
+          'message' => $e->getMessage(),
+        ]);
+      }
+    });
+  }
+
+  /**
    * hook_civicrm_pre callback (Membership, op=create) - force every brand
    * new, non-inherited membership to start as Pending, per requirement 1,
    * regardless of whether it was submitted with immediate payment or
@@ -402,7 +520,7 @@ class CRM_Membershipapprovalworkflow_Utils {
    * Current and Grace are not protected statuses, so a renewal edit against
    * a membership already in one of those states (the normal case - core
    * extends the existing row's end_date) passes through untouched here;
-   * only Pending / Under Review / Approved-Pending-Payment are pinned.
+   * only the statuses in protectedStatusNames() are pinned.
    *
    * "Already in" is judged from getObservedStatusId(), not a fresh
    * database read, so a renewal's own intermediate Pending save (see that
@@ -431,9 +549,15 @@ class CRM_Membershipapprovalworkflow_Utils {
 
   /**
    * hook_civicrm_post callback (Contribution) - when a contribution linked
-   * to a membership currently "Approved/Pending Payment" is completed,
-   * move that membership to Current with start date = payment date
-   * (requirements 2D / 5).
+   * to a membership becomes completed:
+   *  - if that membership is "Approved/Pending Payment", move it to
+   *    Current with start date = payment date (requirements 2D / 5).
+   *  - if that membership is still the initial "Pending" (i.e. payment
+   *    was made at signup rather than pay-later, before staff have
+   *    reviewed it), move it to "Pending Approval/Payment Received" so
+   *    staff can see payment has already been received. A pay-later
+   *    membership whose contribution is never completed is unaffected
+   *    and stays Pending, per existing behavior.
    */
   public static function handleContributionCompleted($contributionId) {
     $paymentDate = civicrm_api3('Contribution', 'getvalue', [
@@ -449,8 +573,12 @@ class CRM_Membershipapprovalworkflow_Utils {
     foreach ($membershipPayments as $membershipPayment) {
       $membershipId = $membershipPayment['membership_id'];
       $statusId = CRM_Core_DAO::getFieldValue('CRM_Member_DAO_Membership', $membershipId, 'status_id');
-      if (self::getStatusNameById($statusId) === self::STATUS_APPROVED_PENDING_PAYMENT) {
+      $statusName = self::getStatusNameById($statusId);
+      if ($statusName === self::STATUS_APPROVED_PENDING_PAYMENT) {
         self::markCurrentOnPayment($membershipId, $paymentDate);
+      }
+      elseif ($statusName === self::STATUS_PENDING) {
+        self::markPendingApprovalPaymentReceived($membershipId);
       }
     }
   }
@@ -460,8 +588,7 @@ class CRM_Membershipapprovalworkflow_Utils {
    *
    * Two jobs:
    *
-   * 1. Keep "Pending" / "Under Review" / "Approved/Pending Payment"
-   *    memberships in place. They are only ever meant to change via the
+   * 1. Keep protectedStatusNames() memberships in place. They are only ever meant to change via the
    *    approval dropdown or the payment hook above, never via CiviCRM's
    *    date-based status calculator (the nightly job, membership
    *    create/edit, or the renewal/order-complete flow all funnel through

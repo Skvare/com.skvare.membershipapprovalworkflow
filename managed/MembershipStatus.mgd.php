@@ -12,6 +12,23 @@ use CRM_Membershipapprovalworkflow_ExtensionUtil as E;
  */
 return [
   [
+    'name' => 'MembershipApprovalWorkflow_Status_PendingApprovalPaymentReceived',
+    'entity' => 'MembershipStatus',
+    'params' => [
+      'version' => 3,
+      'name' => 'Pending Approval/Payment Received',
+      'label' => E::ts('Pending Approval/Payment Received'),
+      'start_event' => NULL,
+      'end_event' => NULL,
+      'is_current_member' => 0,
+      'is_admin' => 1,
+      'is_active' => 1,
+      'is_default' => 0,
+      'is_reserved' => 0,
+      'weight' => 7,
+    ],
+  ],
+  [
     'name' => 'MembershipApprovalWorkflow_Status_UnderReview',
     'entity' => 'MembershipStatus',
     'params' => [
