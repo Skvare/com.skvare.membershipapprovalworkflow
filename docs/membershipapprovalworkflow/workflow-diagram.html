@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Membership Approval Workflow - State Diagram</title>
+<style>
+  :root {
+    --ink: #1c2430;
+    --muted: #5b6675;
+    --bg: #f7f8fa;
+    --panel: #ffffff;
+    --border: #d7dce3;
+    --manual: #2563eb;
+    --manual-bg: #eaf1fe;
+    --auto: #b45309;
+    --auto-bg: #fdf3e3;
+    --exempt: #7c3aed;
+    --exempt-bg: #f2ebfe;
+    --terminal: #6b7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2rem 1.25rem 3rem;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
+  .subtitle { color: var(--muted); margin: 0 0 1.5rem; font-size: 0.95rem; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem;
+    margin-bottom: 1.5rem;
+    overflow-x: auto;
+  }
+  svg { display: block; margin: 0 auto; min-width: 720px; }
+  .box-label { font-size: 15px; font-weight: 600; fill: var(--ink); }
+  .box-sub { font-size: 11.5px; fill: var(--muted); }
+  .edge-label {
+    font-size: 11.5px;
+    fill: var(--ink);
+    paint-order: stroke;
+    stroke: #fff;
+    stroke-width: 5px;
+    stroke-linejoin: round;
+  }
+  .edge-label.manual { fill: var(--manual); }
+  .edge-label.auto { fill: var(--auto); }
+  .edge-label.exempt { fill: var(--exempt); }
+  .mail { font-size: 12px; }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.25rem 2rem;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.5rem; white-space: nowrap; }
+  .swatch { width: 28px; height: 3px; flex: none; }
+  .swatch.manual { background: var(--manual); }
+  .swatch.auto { background: repeating-linear-gradient(90deg, var(--auto) 0 6px, transparent 6px 10px); }
+  .swatch.exempt { background: repeating-linear-gradient(90deg, var(--exempt) 0 6px, transparent 6px 10px); }
+  .swatch.terminal { background: repeating-linear-gradient(90deg, var(--terminal) 0 6px, transparent 6px 10px); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88rem; table-layout: fixed; }
+  th, td { text-align: left; padding: 0.5rem 0.65rem; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: break-word; }
+  th:nth-child(1), td:nth-child(1) { width: 27%; }
+  th:nth-child(2), td:nth-child(2) { width: 27%; }
+  th:nth-child(3), td:nth-child(3) { width: 23%; }
+  th:nth-child(4), td:nth-child(4) { width: 23%; }
+  th { color: var(--muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.02em; }
+  code {
+    background: #eef1f5;
+    border-radius: 4px;
+    padding: 0.05rem 0.35rem;
+    font-size: 0.85em;
+    word-break: break-word;
+  }
+  .foot { color: var(--muted); font-size: 0.82rem; margin-top: 1rem; }
+  .foot a { color: var(--manual); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Membership Approval Workflow</h1>
+  <p class="subtitle">
+    com.skvare.membershipapprovalworkflow - status transitions, which ones are staff-driven
+    vs. automatic, and which ones send an applicant email. Generated reference for
+    <code>docs/membershipapprovalworkflow/</code> - see <code>workflow-states.md</code> and
+    <code>email-notifications.md</code> for the full prose write-up this diagram summarizes.
+  </p>
+
+  <div class="panel">
+    <svg viewBox="0 0 1000 600" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow-manual" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto">
+          <path d="M0,0 L8,4 L0,8 Z" fill="#2563eb" />
+        </marker>
+        <marker id="arrow-auto" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto">
+          <path d="M0,0 L8,4 L0,8 Z" fill="#b45309" />
+        </marker>
+        <marker id="arrow-exempt" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto">
+          <path d="M0,0 L8,4 L0,8 Z" fill="#7c3aed" />
+        </marker>
+        <marker id="arrow-terminal" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto">
+          <path d="M0,0 L8,4 L0,8 Z" fill="#6b7280" />
+        </marker>
+      </defs>
+
+      <!-- ===== Boxes ===== -->
+      <!-- Pending -->
+      <rect x="40" y="28" width="220" height="72" rx="10" fill="#eef2ff" stroke="#94a3d8" />
+      <text x="150" y="58" text-anchor="middle" class="box-label">Pending</text>
+      <text x="150" y="76" text-anchor="middle" class="box-sub">forcePendingOnCreate()</text>
+      <text x="150" y="90" text-anchor="middle" class="box-sub">no payment yet (pay-later)</text>
+
+      <!-- Pending Approval/Payment Received -->
+      <rect x="600" y="28" width="360" height="72" rx="10" fill="#eef2ff" stroke="#94a3d8" />
+      <text x="780" y="52" text-anchor="middle" class="box-label">Pending Approval /</text>
+      <text x="780" y="70" text-anchor="middle" class="box-label">Payment Received</text>
+      <text x="780" y="88" text-anchor="middle" class="box-sub">paid before staff ever reviewed it</text>
+
+      <!-- Under Review -->
+      <rect x="380" y="188" width="240" height="66" rx="10" fill="#eef2ff" stroke="#94a3d8" />
+      <text x="500" y="216" text-anchor="middle" class="box-label">Under Review</text>
+      <text x="500" y="234" text-anchor="middle" class="box-sub">staff started reviewing</text>
+
+      <!-- Approved/Pending Payment -->
+      <rect x="50" y="340" width="280" height="72" rx="10" fill="#eef2ff" stroke="#94a3d8" />
+      <text x="190" y="368" text-anchor="middle" class="box-label">Approved / Pending Payment</text>
+      <text x="190" y="386" text-anchor="middle" class="box-sub">approved by staff, awaiting payment</text>
+
+      <!-- Current -->
+      <rect x="620" y="340" width="280" height="72" rx="10" fill="#e7f6ec" stroke="#7cb98f" />
+      <text x="760" y="368" text-anchor="middle" class="box-label">Approved (Current)</text>
+      <text x="760" y="386" text-anchor="middle" class="box-sub">active membership</text>
+
+      <!-- Terminal -->
+      <rect x="280" y="500" width="440" height="56" rx="10" fill="#f1f2f4" stroke="#c3c8d1" stroke-dasharray="4 3" />
+      <text x="500" y="524" text-anchor="middle" class="box-label" style="font-size:13px;">Grace -&gt; Expired -&gt; ...</text>
+      <text x="500" y="542" text-anchor="middle" class="box-sub">core's normal date-based calculator - untouched by this extension</text>
+
+      <!-- ===== Edges ===== -->
+
+      <!-- Pending -> Under Review (manual) -->
+      <line x1="180" y1="100" x2="450" y2="188" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-manual)" />
+      <text x="230" y="140" class="edge-label manual">action: Under Review</text>
+      <text x="230" y="155" class="edge-label manual mail">&#9993; notify_under_review</text>
+
+      <!-- Pending Approval/Payment Received -> Under Review (manual) -->
+      <line x1="700" y1="100" x2="555" y2="188" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-manual)" />
+      <text x="610" y="140" class="edge-label manual">action: Under Review</text>
+      <text x="610" y="155" class="edge-label manual mail">&#9993; notify_under_review</text>
+
+      <!-- Pending -> Pending Approval/Payment Received (auto) -->
+      <line x1="260" y1="64" x2="600" y2="64" stroke="#b45309" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrow-auto)" />
+      <text x="430" y="46" text-anchor="middle" class="edge-label auto">payment received (still unreviewed)</text>
+      <text x="430" y="34" text-anchor="middle" class="edge-label auto mail" style="font-size:10.5px;">handleContributionCompleted() -&gt; markPendingApprovalPaymentReceived()</text>
+
+      <!-- Pending -> Current (exempt fast path, auto) -->
+      <path d="M60,100 C60,240 340,300 620,368" fill="none" stroke="#7c3aed" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrow-exempt)" />
+      <text x="70" y="270" class="edge-label exempt" style="font-size:11px;">payment received AND contact already has</text>
+      <text x="70" y="283" class="edge-label exempt" style="font-size:11px;">an Expired membership of the same type</text>
+      <text x="70" y="296" class="edge-label exempt mail" style="font-size:10.5px;">isRenewalOfExpiredMembership() -&gt; skip review entirely</text>
+
+      <!-- Under Review -> Approved/Pending Payment (manual) -->
+      <line x1="440" y1="254" x2="240" y2="340" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-manual)" />
+      <text x="245" y="300" class="edge-label manual">action: Approved/Pending Payment</text>
+      <text x="245" y="315" class="edge-label manual" style="font-size:10.5px;">(no payment received yet)</text>
+      <text x="245" y="330" class="edge-label manual mail">&#9993; notify_approved_pending_payment</text>
+
+      <!-- Under Review -> Current (manual) -->
+      <line x1="580" y1="254" x2="740" y2="340" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-manual)" />
+      <text x="600" y="300" class="edge-label manual">action: Approved</text>
+      <text x="600" y="315" class="edge-label manual" style="font-size:10.5px;">(payment already received)</text>
+      <text x="600" y="330" class="edge-label manual mail">&#9993; notify_approved</text>
+
+      <!-- Approved/Pending Payment -> Current (auto) -->
+      <line x1="330" y1="376" x2="620" y2="376" stroke="#b45309" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrow-auto)" />
+      <text x="475" y="368" text-anchor="middle" class="edge-label auto">contribution completed</text>
+      <text x="475" y="356" text-anchor="middle" class="edge-label auto mail" style="font-size:10.5px;">markCurrentOnPayment()</text>
+
+      <!-- Current -> terminal (auto, no email) -->
+      <line x1="760" y1="412" x2="560" y2="500" stroke="#6b7280" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrow-terminal)" />
+    </svg>
+  </div>
+
+  <div class="panel">
+    <div class="legend">
+      <div class="legend-item"><span class="swatch manual"></span> Manual staff action (approval dropdown) - sends an email, independently switchable</div>
+      <div class="legend-item"><span class="swatch auto"></span> Automatic system transition on contribution completion - no email</div>
+      <div class="legend-item"><span class="swatch exempt"></span> Automatic exemption for a same-type renewal of an Expired membership - no email, skips review</div>
+      <div class="legend-item"><span class="swatch terminal"></span> Core's own date-based calculator, unrelated to this extension</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <table>
+      <thead>
+        <tr><th>Transition</th><th>Trigger</th><th>Email</th><th>Setting</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Pending / Pending Approval&#8203;-Payment&#8203;-Received &rarr; Under Review</td>
+          <td>Staff pick "Under Review" on the approval screen</td>
+          <td><code>membershipapprovalworkflow_under_review</code></td>
+          <td><code>membershipapprovalworkflow_notify_under_review</code></td>
+        </tr>
+        <tr>
+          <td>Under Review &rarr; Approved/Pending Payment</td>
+          <td>Staff pick "Approved/Pending Payment" (only offered when payment hasn't been received)</td>
+          <td><code>membershipapprovalworkflow_under_review_approved</code></td>
+          <td><code>membershipapprovalworkflow_notify_approved_pending_payment</code></td>
+        </tr>
+        <tr>
+          <td>Under Review &rarr; Approved (Current)</td>
+          <td>Staff pick "Approved" (only offered when payment has already been received)</td>
+          <td><code>membershipapprovalworkflow_under_review_approved</code> (same template, branches on outcome)</td>
+          <td><code>membershipapprovalworkflow_notify_approved</code></td>
+        </tr>
+        <tr>
+          <td>Pending &rarr; Pending Approval/Payment Received</td>
+          <td>Linked contribution completes while still unreviewed</td>
+          <td>none</td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <td>Pending &rarr; Approved (Current)</td>
+          <td>Linked contribution completes AND contact already has an Expired membership of the same type</td>
+          <td>none</td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <td>Approved/Pending Payment &rarr; Approved (Current)</td>
+          <td>Linked contribution completes</td>
+          <td>none</td>
+          <td>&mdash;</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="foot">
+    Settings screen: Administer &gt; CiviMember &gt; Membership Approval Workflow Notifications
+    (<code>civicrm/admin/membershipapprovalworkflow</code>). All three notification settings default to enabled.
+    See <a href="email-notifications.md">email-notifications.md</a> for token reference and customization,
+    <a href="workflow-states.md">workflow-states.md</a> for the full transition rules, and
+    <a href="signup-scenarios.md">signup-scenarios.md</a> for concrete end-to-end signup/renewal walkthroughs.
+  </p>
+</div>
+</body>
+</html>

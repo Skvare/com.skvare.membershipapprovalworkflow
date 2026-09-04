@@ -10,6 +10,11 @@ This directory documents how the extension works internally - the companion
 
 ## Contents
 
+- [`workflow-diagram.html`](./workflow-diagram.html) - a single-file, no
+  dependencies visual diagram of every status and transition (manual
+  vs. automatic, which ones email the applicant and under which setting).
+  Open it directly in a browser. Start here for a quick visual overview
+  before the detailed pages below.
 - [`workflow-states.md`](./workflow-states.md) - the four workflow statuses,
   the exact allowed transitions, and where a membership exits the workflow
   entirely.
