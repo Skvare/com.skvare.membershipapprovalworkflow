@@ -70,7 +70,13 @@ manual action, both from `Utils::handleContributionCompleted()`
 (triggered from `hook_civicrm_post` on `Contribution`, when a linked
 contribution's new status is `Completed`):
 
-- **Pending -> Pending Approval/Payment Received.** See above.
+- **Pending -> Pending Approval/Payment Received.** See above - *unless*
+  the contact has any other `Expired` membership of the same type
+  (`Utils::isRenewalOfExpiredMembership()`). This is an intentional policy:
+  any returning member of that type is treated as a renewal and skips the
+  review queue entirely, even if there is no direct contribution, date, or
+  renewal-record link between the two membership rows. It goes straight to
+  **Current** instead (see `signup-scenarios.md` - Scenario 3).
 - **Approved/Pending Payment -> Approved (Current).** When a contribution
   linked to an `Approved/Pending Payment` membership is marked `Completed`
   (online payment, offline check clearing, or a back-office "Record
@@ -78,8 +84,10 @@ contribution's new status is `Completed`):
   Current automatically, with `start_date` set to the contribution's
   `receive_date`.
 
-The second of these is the only place a membership can reach Current
-without a human explicitly choosing "Approved" on the approval screen.
+Both the Expired-renewal exception above and the second bullet reach
+Current via the same `Utils::markCurrentOnPayment()` helper. Together,
+these are the only places a membership can reach Current without a human
+explicitly choosing "Approved" on the approval screen.
 
 ## What "Approved" actually sets
 

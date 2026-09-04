@@ -30,10 +30,11 @@ and cleared once wouldn't survive re-entrancy correctly.
 All hooks are implemented in `membershipapprovalworkflow.php` and delegate
 to `CRM_Membershipapprovalworkflow_Utils`.
 
-### `hook_civicrm_install` / `hook_civicrm_uninstall`
+### `hook_civicrm_install` / `hook_civicrm_enable` / `hook_civicrm_disable` / `hook_civicrm_uninstall`
 
-Deactivates the core "New" membership status on install (reactivates on
-uninstall). CiviCRM's status calculator only considers `is_active = 1`
+Deactivates the core "New" membership status while the extension is enabled,
+then restores the active/inactive state that existed before installation on
+disable or uninstall. CiviCRM's status calculator only considers `is_active = 1`
 statuses, so this removes "New" from the calculator, the status picker,
 and the renewal path entirely - anything that would have landed on New
 now lands on Current instead (the next-highest-weight matching status).
@@ -136,6 +137,27 @@ permission) is handled by `CRM_Membershipapprovalworkflow_Form_Approve`:
   $values['approval_action'])`, which validates the action is still legal
   for the membership's current status, builds the appropriate `status_id`
   (and, for "Approved", the recalculated dates), and applies it via
-  `Membership.create`. If the transition is Under Review -> (Approved or
-  Approved/Pending Payment), it also sends the approval notification
-  email - see `email-notifications.md`.
+  `Membership.create`. Depending on which action it was, it then sends one
+  of two notification emails (each independently switchable from
+  **Administer > CiviMember > Membership Approval Workflow Notifications**)
+  - see `email-notifications.md`:
+  - moving into Under Review -> `sendUnderReviewNotification()`;
+  - Under Review -> (Approved or Approved/Pending Payment) ->
+    `sendUnderReviewApprovedNotification()`.
+
+## The notification settings screen
+
+`civicrm/admin/membershipapprovalworkflow` (also registered in
+`xml/Menu/membershipapprovalworkflow.xml`, requires `administer CiviCRM`,
+linked from Administer > CiviMember via `hook_civicrm_navigationMenu()`)
+is handled by `CRM_Membershipapprovalworkflow_Form_Settings`, which adds no
+logic of its own - it extends core's `CRM_Admin_Form_Setting` directly.
+Everything (which fields appear, their defaults, saving them) is driven by
+the three `membershipapprovalworkflow_notify_*` settings in
+`settings/MembershipApprovalWorkflow.setting.php`, each tagged
+`'settings_pages' => ['membershipapprovalworkflow' => [...]]` - that key
+must match the last segment of this page's URL
+(`CRM_Admin_Form_SettingTrait::getSettingPageFilter()`), which is how the
+base class knows which settings belong on this particular page. Adding a
+fourth notification later is just adding a fourth setting with the same
+`settings_pages` key - no form code changes needed.

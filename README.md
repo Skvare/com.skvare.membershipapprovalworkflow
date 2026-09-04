@@ -11,8 +11,10 @@ membership record.
 
 - Every new membership (immediate payment or pay-later, front-end or
   back-office) starts as **Pending**. It never activates on its own.
-- Two new statuses are added: **Under Review** and **Approved/Pending
-  Payment**. Both are administrative statuses (like core's own
+- Three new statuses are added: **Under Review**, **Approved/Pending
+  Payment**, and **Pending Approval/Payment Received** (used instead of
+  plain Pending when payment comes in before staff have reviewed the
+  application). All three are administrative statuses (like core's own
   Cancelled/Deceased) - CiviCRM's automatic status calculator, the nightly
   membership-status cron job, and the renewal/order-complete flow will
   never assign or change them on their own.
@@ -23,22 +25,35 @@ membership record.
   shows only the next valid action(s) for the membership's current
   status, and a "workflow sequence" help block showing where that status
   sits in the process:
-  - Pending -> Under Review
-  - Under Review -> Approved/Pending Payment or Approved
+  - Pending or Pending Approval/Payment Received -> Under Review
+  - Under Review -> Approved/Pending Payment **or** Approved (Current) -
+    exactly one of the two is offered, based on whether payment has
+    already been received
   - Approved/Pending Payment -> Approved
   - Anything else (Current, Grace, Expired, ...) -> no action shown
 - Choosing **Approved** sets status to Current and start date to today.
-- When staff move a membership out of **Under Review** into **Approved**
-  or **Approved/Pending Payment**, the member is emailed a notification
-  (customizable from Administer > Communications > Message Templates).
+- Each of the three status-changing actions above (moved to Under Review;
+  approved, pending payment; approved and Current) sends the member an
+  email notification, customizable from Administer > Communications >
+  Message Templates, and independently switchable on/off from
+  **Administer > CiviMember > Membership Approval Workflow Notifications**
+  (`civicrm/admin/membershipapprovalworkflow`).
 - When a contribution linked to an "Approved/Pending Payment" membership
   is completed (online payment, offline check, or a back-office "Record
   Payment"), the membership automatically moves to **Current** with its
-  start date set to the payment's receive date.
-- The **New** status is deactivated on install (and reactivated on
-  uninstall) so it can never be assigned - existing statuses that would
+  start date set to the payment's receive date. A membership still sitting
+  in plain "Pending" whose payment completes is bumped to "Pending
+  Approval/Payment Received" instead - or, if the contact already held an
+  Expired membership of the same type, straight to Current - see
+  `docs/membershipapprovalworkflow/signup-scenarios.md`.
+- The **New** status is deactivated while the extension is enabled and its
+  prior active/inactive state is restored on disable or uninstall. Existing
+  statuses that would
   have landed on New now land on Current instead, which also means a
   membership renewal never resets to New.
+  Installations upgraded from 1.0.0 retain that release's documented
+  uninstall behavior and restore New as active, because 1.0.0 did not retain
+  its prior state.
 - All changes are applied through the standard `Membership.create` API,
   so CiviCRM core's own inherited-membership sync
   (`CRM_Member_BAO_Membership::createRelatedMemberships()`) automatically

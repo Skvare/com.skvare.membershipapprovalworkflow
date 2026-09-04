@@ -20,8 +20,19 @@ class CRM_Membershipapprovalworkflow_Utils {
   const STATUS_PENDING_APPROVAL_PAYMENT_RECEIVED = 'Pending Approval/Payment Received';
   const STATUS_CURRENT = 'Current';
   const STATUS_GRACE = 'Grace';
-  const STATUS_NEW = 'New';
   const STATUS_EXPIRED = 'Expired';
+
+  const SETTING_NEW_STATUS_WAS_ACTIVE = 'membershipapprovalworkflow_new_status_was_active';
+
+  /**
+   * Settings (settings/MembershipApprovalWorkflow.setting.php) controlling
+   * which approval-workflow notification emails actually get sent - see
+   * CRM_Membershipapprovalworkflow_Form_Settings. All default to enabled,
+   * matching this extension's behavior before these settings existed.
+   */
+  const SETTING_NOTIFY_UNDER_REVIEW = 'membershipapprovalworkflow_notify_under_review';
+  const SETTING_NOTIFY_APPROVED_PENDING_PAYMENT = 'membershipapprovalworkflow_notify_approved_pending_payment';
+  const SETTING_NOTIFY_APPROVED = 'membershipapprovalworkflow_notify_approved';
 
   /**
    * Action keys used by the approval dropdown, in display order.
@@ -90,6 +101,91 @@ class CRM_Membershipapprovalworkflow_Utils {
       'name',
       'id'
     );
+  }
+
+  /**
+   * Disable core's New status while recording its prior state exactly once.
+   *
+   * The setting is retained while enabled so an enable/disable cycle restores
+   * the state that existed before this extension was installed.
+   */
+  public static function deactivateNewStatus() {
+    $newStatusId = self::getStatusIdByName('New');
+    if (!$newStatusId) {
+      return;
+    }
+
+    $settings = Civi::settings();
+    if ($settings->get(self::SETTING_NEW_STATUS_WAS_ACTIVE) === NULL) {
+      $settings->set(
+        self::SETTING_NEW_STATUS_WAS_ACTIVE,
+        (bool) CRM_Core_DAO::getFieldValue('CRM_Member_DAO_MembershipStatus', $newStatusId, 'is_active')
+      );
+    }
+
+    civicrm_api3('MembershipStatus', 'create', [
+      'id' => $newStatusId,
+      'is_active' => 0,
+    ]);
+  }
+
+  /**
+   * Seed the restoration state for installations upgraded from releases that
+   * predate SETTING_NEW_STATUS_WAS_ACTIVE.
+   *
+   * Those releases always reactivated New on uninstall. Its actual pre-install
+   * state was not recorded, so TRUE is the only behavior-compatible fallback.
+   */
+  public static function seedLegacyNewStatusState() {
+    $settings = Civi::settings();
+    if ($settings->get(self::SETTING_NEW_STATUS_WAS_ACTIVE) === NULL) {
+      $settings->set(self::SETTING_NEW_STATUS_WAS_ACTIVE, TRUE);
+    }
+  }
+
+  /**
+   * Restore the New status to the state it had before this extension changed
+   * it, then remove the saved state.
+   */
+  public static function restoreNewStatus() {
+    $settings = Civi::settings();
+    $wasActive = $settings->get(self::SETTING_NEW_STATUS_WAS_ACTIVE);
+    if ($wasActive === NULL) {
+      return;
+    }
+
+    $newStatusId = self::getStatusIdByName('New');
+    if ($newStatusId) {
+      $isActive = CRM_Core_DAO::getFieldValue(
+        'CRM_Member_DAO_MembershipStatus',
+        $newStatusId,
+        'is_active'
+      );
+      // If an administrator has explicitly reactivated New while the
+      // workflow was enabled, preserve that newer choice rather than
+      // overwriting it with the install-time value.
+      if ($isActive) {
+        $settings->revert(self::SETTING_NEW_STATUS_WAS_ACTIVE);
+        return;
+      }
+      civicrm_api3('MembershipStatus', 'create', [
+        'id' => $newStatusId,
+        'is_active' => (int) $wasActive,
+      ]);
+    }
+    $settings->revert(self::SETTING_NEW_STATUS_WAS_ACTIVE);
+  }
+
+  /**
+   * Reject direct actions against inherited memberships. Core owns their
+   * status through createRelatedMemberships() on the primary membership.
+   *
+   * @throws \CRM_Core_Exception
+   */
+  public static function assertPrimaryMembership(array $membership) {
+    if (!empty($membership['owner_membership_id'])) {
+      throw new CRM_Core_Exception(E::ts('Inherited memberships must be updated through their primary membership.'));
+    }
   }
 
   /**
@@ -292,6 +388,7 @@ class CRM_Membershipapprovalworkflow_Utils {
    */
   public static function applyAction($membershipId, $action) {
     $membership = civicrm_api3('Membership', 'getsingle', ['id' => $membershipId]);
+    self::assertPrimaryMembership($membership);
     $currentStatusName = self::getStatusNameById($membership['status_id']);
     $allowedActions = self::getAllowedActions($currentStatusName, self::hasReceivedPayment($membershipId));
     if (!array_key_exists($action, $allowedActions)) {
@@ -330,7 +427,10 @@ class CRM_Membershipapprovalworkflow_Utils {
       return civicrm_api3('Membership', 'create', $params)['values'][$membershipId] ?? [];
     });
 
-    if ($currentStatusName === self::STATUS_UNDER_REVIEW
+    if ($action === self::ACTION_UNDER_REVIEW) {
+      self::sendUnderReviewNotification($result + $membership);
+    }
+    elseif ($currentStatusName === self::STATUS_UNDER_REVIEW
       && in_array($action, [self::ACTION_APPROVED_PENDING_PAYMENT, self::ACTION_APPROVED], TRUE)
     ) {
       // Use $result (the just-saved record), not $membership (fetched
@@ -343,6 +443,62 @@ class CRM_Membershipapprovalworkflow_Utils {
   }
 
   /**
+   * Email the member when their membership moves from Pending (or Pending
+   * Approval/Payment Received) into "Under Review" - the ACTION_UNDER_REVIEW
+   * branch of applyAction(). Gated by the
+   * SETTING_NOTIFY_UNDER_REVIEW setting - see
+   * CRM_Membershipapprovalworkflow_Form_Settings.
+   *
+   * Never lets a notification failure (missing/suppressed email, mail
+   * transport error) block the approval itself - the status change has
+   * already been committed by the time this runs.
+   */
+  private static function sendUnderReviewNotification(array $membership) {
+    if (!Civi::settings()->get(self::SETTING_NOTIFY_UNDER_REVIEW)) {
+      return;
+    }
+
+    $contactId = $membership['contact_id'];
+    $toEmail = CRM_Contact_BAO_Contact::getPrimaryEmail($contactId, TRUE);
+    if (!$toEmail) {
+      Civi::log()->info('membershipapprovalworkflow: no deliverable primary email for contact {contactId}, skipping under-review notification for membership {membershipId}.', [
+        'contactId' => $contactId,
+        'membershipId' => $membership['id'],
+      ]);
+      return;
+    }
+
+    $membershipTypeName = CRM_Core_DAO::getFieldValue(
+      'CRM_Member_DAO_MembershipType',
+      $membership['membership_type_id'],
+      'name'
+    );
+
+    try {
+      $result = CRM_Core_BAO_MessageTemplate::sendTemplate([
+        'workflow' => 'membershipapprovalworkflow_under_review',
+        'contactId' => $contactId,
+        'toEmail' => $toEmail,
+        'tplParams' => [
+          'membershipTypeName' => $membershipTypeName,
+        ],
+      ]);
+      if (empty($result[0])) {
+        Civi::log()->error('membershipapprovalworkflow: under-review notification could not be sent for membership {membershipId}: {message}', [
+          'membershipId' => $membership['id'],
+          'message' => $result[4] ?: 'Unknown mail transport error',
+        ]);
+      }
+    }
+    catch (CRM_Core_Exception $e) {
+      Civi::log()->error('membershipapprovalworkflow: failed to send under-review notification for membership {membershipId}: {message}', [
+        'membershipId' => $membership['id'],
+        'message' => $e->getMessage(),
+      ]);
+    }
+  }
+
+  /**
    * Email the member when staff move their membership out of "Under
    * Review" into either outcome of a completed review - "Approved"
    * (Current) or "Approved/Pending Payment". Both share one message
@@ -351,11 +507,23 @@ class CRM_Membershipapprovalworkflow_Utils {
    * template branches on $newStatusName to word the two outcomes
    * differently.
    *
+   * Gated per-outcome by SETTING_NOTIFY_APPROVED_PENDING_PAYMENT /
+   * SETTING_NOTIFY_APPROVED - see CRM_Membershipapprovalworkflow_Form_Settings.
+   * Both outcomes keep sharing this one template even though they're gated
+   * independently; only whether it gets sent at all differs per outcome.
+   *
    * Never lets a notification failure (missing/suppressed email, mail
    * transport error) block the approval itself - the status change has
    * already been committed by the time this runs.
    */
   private static function sendUnderReviewApprovedNotification(array $membership, $newStatusName) {
+    $settingName = $newStatusName === self::STATUS_APPROVED_PENDING_PAYMENT
+      ? self::SETTING_NOTIFY_APPROVED_PENDING_PAYMENT
+      : self::SETTING_NOTIFY_APPROVED;
+    if (!Civi::settings()->get($settingName)) {
+      return;
+    }
+
     $contactId = $membership['contact_id'];
     $toEmail = CRM_Contact_BAO_Contact::getPrimaryEmail($contactId, TRUE);
     if (!$toEmail) {
@@ -373,7 +541,7 @@ class CRM_Membershipapprovalworkflow_Utils {
     );
 
     try {
-      CRM_Core_BAO_MessageTemplate::sendTemplate([
+      $result = CRM_Core_BAO_MessageTemplate::sendTemplate([
         'workflow' => 'membershipapprovalworkflow_under_review_approved',
         'contactId' => $contactId,
         'toEmail' => $toEmail,
@@ -384,6 +552,12 @@ class CRM_Membershipapprovalworkflow_Utils {
           'membershipEndDate' => $membership['end_date'] ?? NULL,
         ],
       ]);
+      if (empty($result[0])) {
+        Civi::log()->error('membershipapprovalworkflow: approval notification could not be sent for membership {membershipId}: {message}', [
+          'membershipId' => $membership['id'],
+          'message' => $result[4] ?: 'Unknown mail transport error',
+        ]);
+      }
     }
     catch (CRM_Core_Exception $e) {
       Civi::log()->error('membershipapprovalworkflow: failed to send approval notification for membership {membershipId}: {message}', [
@@ -412,17 +586,8 @@ class CRM_Membershipapprovalworkflow_Utils {
       'status_id' => self::getStatusIdByName(self::STATUS_CURRENT),
     ];
     $params += self::datesForStart($membership, $paymentDate);
-    self::runWorkflowUpdate(static function () use ($params) {
-      try {
-        $result = civicrm_api3('Membership', 'create', $params);
-      }
-      catch (CRM_Core_Exception $e) {
-        Civi::log()->error('membershipapprovalworkflow: failed to mark membership {membershipId} as Current on payment {paymentDate}: {message}', [
-          'membershipId' => $params['id'],
-          'paymentDate' => $params['start_date'],
-          'message' => $e->getMessage(),
-        ]);
-      }
+    return self::runWorkflowUpdate(static function () use ($params) {
+      return civicrm_api3('Membership', 'create', $params);
     });
   }
 
@@ -445,16 +610,8 @@ class CRM_Membershipapprovalworkflow_Utils {
       'status_override_end_date' => '',
       'status_id' => self::getStatusIdByName(self::STATUS_PENDING_APPROVAL_PAYMENT_RECEIVED),
     ];
-    self::runWorkflowUpdate(static function () use ($params) {
-      try {
-        civicrm_api3('Membership', 'create', $params);
-      }
-      catch (CRM_Core_Exception $e) {
-        Civi::log()->error('membershipapprovalworkflow: failed to mark membership {membershipId} as Pending Approval/Payment Received: {message}', [
-          'membershipId' => $params['id'],
-          'message' => $e->getMessage(),
-        ]);
-      }
+    return self::runWorkflowUpdate(static function () use ($params) {
+      return civicrm_api3('Membership', 'create', $params);
     });
   }
 
@@ -476,9 +633,9 @@ class CRM_Membershipapprovalworkflow_Utils {
     if (!empty($params['owner_membership_id'])) {
       return;
     }
-    //if (self::isRenewalOfActiveMembership($params)) {
-    //  return;
-    //}
+    if (self::isRenewalOfActiveMembership($params)) {
+      return;
+    }
     $pendingId = self::getStatusIdByName(self::STATUS_PENDING);
     if (!$pendingId) {
       return;
@@ -538,10 +695,6 @@ class CRM_Membershipapprovalworkflow_Utils {
     if (!in_array($currentStatusName, self::protectedStatusNames(), TRUE)) {
       return;
     }
-    if ($currentStatusId !== ($params['status_id'] ?? NULL) && $currentStatusId == self::getStatusIdByName(self::STATUS_CURRENT)) {
-      return;
-    }
-
     $params['status_id'] = $currentStatusId;
     $params['skipStatusCal'] = TRUE;
     $params['is_override'] = 0;
@@ -602,17 +755,19 @@ class CRM_Membershipapprovalworkflow_Utils {
   }
 
   /**
-   * True if this membership is a renewal of an Expired membership of the
-   * same type for the same contact - i.e. the contact already held this
-   * membership type before, just not continuously, rather than this being
-   * a genuinely new application.
+   * True if this membership qualifies for the expired-member approval
+   * exemption. The policy deliberately treats any prior Expired membership
+   * of the same type for the same contact as a renewal/returning-member
+   * application, even when CiviCRM does not provide a direct renewal or
+   * contribution link between the two rows. Returning applicants of that
+   * type therefore bypass staff review once payment is received.
    *
    * Needed because core (as configured on this site) creates a brand-new
    * membership row for a renewal of an Expired membership instead of
    * editing the old row, so `handleContributionCompleted()` can't tell a
-   * true fresh signup apart from this kind of renewal just by looking at
-   * the membership's own `id`/status history - it has to check for a
-   * sibling row.
+   * first-time application apart from this policy-defined renewal just by
+   * looking at the membership's own `id`/status history - it has to check
+   * for a sibling row.
    *
    * @param int $membershipId
    * @return bool

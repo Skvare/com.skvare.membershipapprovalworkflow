@@ -20,9 +20,11 @@ class CRM_Membershipapprovalworkflow_Form_Approve extends CRM_Core_Form {
 
   public function preProcess() {
     $this->membershipId = CRM_Utils_Request::retrieve('id', 'Positive', $this, TRUE);
-    $this->contactId = CRM_Utils_Request::retrieve('cid', 'Positive', $this, TRUE);
-
     $membership = civicrm_api3('Membership', 'getsingle', ['id' => $this->membershipId]);
+    CRM_Membershipapprovalworkflow_Utils::assertPrimaryMembership($membership);
+    // Do not trust a contact ID from the URL. It must always match the
+    // membership being acted on.
+    $this->contactId = $membership['contact_id'];
     $this->currentStatusName = CRM_Membershipapprovalworkflow_Utils::getStatusNameById($membership['status_id']);
     $paymentReceived = CRM_Membershipapprovalworkflow_Utils::hasReceivedPayment($this->membershipId);
     $this->allowedActions = CRM_Membershipapprovalworkflow_Utils::getAllowedActions($this->currentStatusName, $paymentReceived);

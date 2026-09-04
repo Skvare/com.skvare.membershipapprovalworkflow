@@ -6,4 +6,10 @@
     <title>Membership Approval</title>
     <access_arguments>edit memberships</access_arguments>
   </item>
+  <item>
+    <path>civicrm/admin/membershipapprovalworkflow</path>
+    <page_callback>CRM_Membershipapprovalworkflow_Form_Settings</page_callback>
+    <title>Membership Approval Workflow Notifications</title>
+    <access_arguments>administer CiviCRM</access_arguments>
+  </item>
 </menu>

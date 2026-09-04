@@ -20,9 +20,13 @@ This directory documents how the extension works internally - the companion
   request-scoped caching mechanism built to handle them. Read this before
   changing anything in `preserveWorkflowStatusOnEdit()` or
   `preserveProtectedStatus()`.
-- [`email-notifications.md`](./email-notifications.md) - the "Under Review
-  approved" message template: what triggers it, what tokens it exposes, and
-  how to customize it.
+- [`email-notifications.md`](./email-notifications.md) - the three
+  notification message templates: what triggers each, what tokens they
+  expose, how to customize them, and how the on/off settings gate each one.
+- [`signup-scenarios.md`](./signup-scenarios.md) - walks the concrete status
+  outcome for card-paid-immediately vs. pay-later signups, and what happens
+  when an already-Expired membership is renewed (where a separate,
+  third-party extension takes over before this one gets a say).
 
 ## At a glance
 
@@ -32,8 +36,11 @@ This directory documents how the extension works internally - the companion
 | Hook implementations | `membershipapprovalworkflow.php` |
 | Approval action screen | `CRM/Membershipapprovalworkflow/Form/Approve.php` + `templates/CRM/Membershipapprovalworkflow/Form/Approve.tpl` |
 | Approval screen route | `xml/Menu/membershipapprovalworkflow.xml` (`civicrm/membership/approve`) |
-| Custom membership statuses | `managed/MembershipStatus.mgd.php` (Under Review, Approved/Pending Payment) |
-| Approval notification email | `managed/MessageTemplate_UnderReviewApproved.mgd.php` + `managed/under_review_approved_*.tpl` |
+| Notification settings screen | `CRM/Membershipapprovalworkflow/Form/Settings.php` + `templates/CRM/Membershipapprovalworkflow/Form/Settings.tpl` (`civicrm/admin/membershipapprovalworkflow`) |
+| Notification on/off settings | `settings/MembershipApprovalWorkflow.setting.php` (`membershipapprovalworkflow_notify_*`) |
+| Custom membership statuses | `managed/MembershipStatus.mgd.php` (Under Review, Approved/Pending Payment, Pending Approval/Payment Received) |
+| "Under Review" notification email | `managed/MessageTemplate_UnderReview.mgd.php` + `managed/under_review_*.tpl` |
+| "Approved" / "Approved/Pending Payment" notification email | `managed/MessageTemplate_UnderReviewApproved.mgd.php` + `managed/under_review_approved_*.tpl` |
 
 ## Requirement numbers referenced in code comments
 

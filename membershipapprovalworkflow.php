@@ -28,14 +28,7 @@ function membershipapprovalworkflow_civicrm_config(&$config): void {
  */
 function membershipapprovalworkflow_civicrm_install(): void {
   _membershipapprovalworkflow_civix_civicrm_install();
-
-  $newStatusId = CRM_Membershipapprovalworkflow_Utils::getStatusIdByName('New');
-  if ($newStatusId) {
-    civicrm_api3('MembershipStatus', 'create', [
-      'id' => $newStatusId,
-      'is_active' => 0,
-    ]);
-  }
+  CRM_Membershipapprovalworkflow_Utils::deactivateNewStatus();
 }
 
 /**
@@ -47,13 +40,19 @@ function membershipapprovalworkflow_civicrm_install(): void {
  * @link https://docs.civicrm.org/dev/en/latest/hooks/hook_civicrm_uninstall
  */
 function membershipapprovalworkflow_civicrm_uninstall(): void {
-  $newStatusId = CRM_Membershipapprovalworkflow_Utils::getStatusIdByName('New');
-  if ($newStatusId) {
-    civicrm_api3('MembershipStatus', 'create', [
-      'id' => $newStatusId,
-      'is_active' => 1,
-    ]);
-  }
+  CRM_Membershipapprovalworkflow_Utils::restoreNewStatus();
+}
+
+/**
+ * Implements hook_civicrm_disable().
+ *
+ * Restore the site's original New-status state whenever this extension stops
+ * controlling the membership workflow.
+ *
+ * @link https://docs.civicrm.org/dev/en/latest/hooks/hook_civicrm_disable
+ */
+function membershipapprovalworkflow_civicrm_disable(): void {
+  CRM_Membershipapprovalworkflow_Utils::restoreNewStatus();
 }
 
 /**
@@ -85,7 +84,7 @@ function membershipapprovalworkflow_civicrm_links($op, $objectName, $objectId, &
     $links[] = [
       'name' => E::ts('Membership Approval'),
       'url' => 'civicrm/membership/approve',
-      'qs' => 'reset=1&id=%%id%%&cid=%%cid%%',
+      'qs' => 'reset=1&id=%%id%%',
       'title' => E::ts('Membership Approval'),
       'ref' => 'membership-approval',
       'weight' => 60,
@@ -182,4 +181,26 @@ function membershipapprovalworkflow_civicrm_alterCalculatedMembershipStatus(&$me
  */
 function membershipapprovalworkflow_civicrm_enable(): void {
   _membershipapprovalworkflow_civix_civicrm_enable();
+  CRM_Membershipapprovalworkflow_Utils::deactivateNewStatus();
+}
+
+/**
+ * Implements hook_civicrm_navigationMenu().
+ *
+ * Adds the "Membership Approval Workflow Notifications" settings screen
+ * under Administer > CiviMember, so an administrator can toggle each
+ * workflow email on or off - see CRM_Membershipapprovalworkflow_Form_Settings.
+ *
+ * @link https://docs.civicrm.org/dev/en/latest/hooks/hook_civicrm_navigationMenu
+ */
+function membershipapprovalworkflow_civicrm_navigationMenu(&$menu) {
+  _membershipapprovalworkflow_civix_insert_navigation_menu($menu, 'Administer/CiviMember', [
+    'label' => E::ts('Membership Approval Workflow Notifications'),
+    'name' => 'membershipapprovalworkflow_settings',
+    'url' => 'civicrm/admin/membershipapprovalworkflow',
+    'permission' => 'administer CiviCRM',
+    'operator' => 'OR',
+    'separator' => 0,
+  ]);
+  _membershipapprovalworkflow_civix_navigationMenu($menu);
 }

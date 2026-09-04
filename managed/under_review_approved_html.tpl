@@ -18,17 +18,15 @@
 
 {if $newStatusName eq 'Approved/Pending Payment'}
 <p>
-  {ts 1=$membershipTypeName}Good news - your %1 membership application has been reviewed and approved. It is now marked "Approved/Pending Payment"; please complete payment to activate it.{/ts}
+  {ts 1=$membershipTypeName}Your %1 membership application has been reviewed and approved. It is now marked "Approved/Pending Payment"; please complete payment to activate it.{/ts}
 </p>
-  <p>
   <div class="pay_now">
-    Credit Card or Bank Transfer (ACH/EFT): Click Pay Now<br/>
-    <a href="https://www.naatp.org/civicrm/my-dashboard?id={contact.contact_id}&{contact.checksum}" title="" class="landing_page_link" >Pay Now</a>
+    {ts}Credit Card or Bank Transfer (ACH/EFT): Click Pay Now{/ts}<br/>
+    <a href="{crmURL p='civicrm/my-dashboard' q="id={contact.contact_id}&{contact.checksum}" a=1 h=1}" class="landing_page_link">{ts}Pay Now{/ts}</a>
   </div>
-  </p>
 {else}
 <p>
-  {ts 1=$membershipTypeName}Good news - your %1 membership application has been reviewed, approved, and is now active.{/ts}
+  {ts 1=$membershipTypeName}Your %1 membership application has been reviewed, approved, and is now active.{/ts}
 </p>
 {/if}
 
