@@ -638,23 +638,41 @@ class CRM_Membershipapprovalworkflow_Utils {
    * Move an "Approved/Pending Payment" membership to Current once its
    * linked payment is received, per requirement 2D / 5.
    *
+   * Never lets a failure propagate - this is reachable from
+   * hook_civicrm_post (via handleContributionCompleted()), and an
+   * uncaught exception there would surface as a fatal error to the member
+   * immediately after their payment was actually captured and the
+   * contribution already saved as Completed.
+   *
    * @param int $membershipId
    * @param string $paymentDate
    *   Y-m-d (or any CRM_Utils_Date-parseable) date the payment was received.
+   * @return array|NULL
+   *   The updated membership, or NULL if the update failed (logged).
    */
   public static function markCurrentOnPayment($membershipId, $paymentDate) {
-    $membership = self::getMembership($membershipId);
-    $params = [
-      'id' => $membershipId,
-      'contact_id' => $membership['contact_id'],
-      'is_override' => 0,
-      'status_override_end_date' => '',
-      'status_id' => self::getStatusIdByName(self::STATUS_CURRENT),
-    ];
-    $params += self::datesForStart($membership, $paymentDate);
-    return self::runWorkflowUpdate(static function () use ($params) {
-      return self::updateMembership($params);
-    });
+    try {
+      $membership = self::getMembership($membershipId);
+      $params = [
+        'id' => $membershipId,
+        'contact_id' => $membership['contact_id'],
+        'is_override' => 0,
+        'status_override_end_date' => '',
+        'status_id' => self::getStatusIdByName(self::STATUS_CURRENT),
+      ];
+      $params += self::datesForStart($membership, $paymentDate);
+      return self::runWorkflowUpdate(static function () use ($params) {
+        return self::updateMembership($params);
+      });
+    }
+    catch (CRM_Core_Exception $e) {
+      Civi::log()->error('membershipapprovalworkflow: failed to mark membership {membershipId} as Current on payment {paymentDate}: {message}', [
+        'membershipId' => $membershipId,
+        'paymentDate' => $paymentDate,
+        'message' => $e->getMessage(),
+      ]);
+      return NULL;
+    }
   }
 
   /**
@@ -664,20 +682,34 @@ class CRM_Membershipapprovalworkflow_Utils {
    * of choosing pay-later. Only the status changes; there is no start/end
    * date yet since the membership still hasn't been approved.
    *
+   * Never lets a failure propagate - see markCurrentOnPayment(); this is
+   * reachable from the same hook_civicrm_post call chain.
+   *
    * @param int $membershipId
+   * @return array|NULL
+   *   The updated membership, or NULL if the update failed (logged).
    */
   public static function markPendingApprovalPaymentReceived($membershipId) {
-    $membership = self::getMembership($membershipId);
-    $params = [
-      'id' => $membershipId,
-      'contact_id' => $membership['contact_id'],
-      'is_override' => 0,
-      'status_override_end_date' => '',
-      'status_id' => self::getStatusIdByName(self::STATUS_PENDING_APPROVAL_PAYMENT_RECEIVED),
-    ];
-    return self::runWorkflowUpdate(static function () use ($params) {
-      return self::updateMembership($params);
-    });
+    try {
+      $membership = self::getMembership($membershipId);
+      $params = [
+        'id' => $membershipId,
+        'contact_id' => $membership['contact_id'],
+        'is_override' => 0,
+        'status_override_end_date' => '',
+        'status_id' => self::getStatusIdByName(self::STATUS_PENDING_APPROVAL_PAYMENT_RECEIVED),
+      ];
+      return self::runWorkflowUpdate(static function () use ($params) {
+        return self::updateMembership($params);
+      });
+    }
+    catch (CRM_Core_Exception $e) {
+      Civi::log()->error('membershipapprovalworkflow: failed to mark membership {membershipId} as Pending Approval/Payment Received: {message}', [
+        'membershipId' => $membershipId,
+        'message' => $e->getMessage(),
+      ]);
+      return NULL;
+    }
   }
 
   /**
