@@ -1,10 +1,11 @@
 # Architecture: hooks and control flow
 
-## Design principle: never write to the database directly
+## Design principle: never write workflow status/date changes to the database directly
 
 Every status/date change in `Utils.php` goes through the standard
-`Membership.create` API (via `civicrm_api3('Membership', 'create', ...)`),
-never a raw DAO write. This matters because CiviCRM core's own
+`Membership.update` API4 action, never a raw DAO write. (Read-only
+`MembershipPayment` link lookups use its DAO because CiviCRM 6.16 has no
+API4 entity for it.) This matters because CiviCRM core's own
 related-membership propagation
 (`CRM_Member_BAO_Membership::createRelatedMemberships()`, called
 unconditionally at the end of `BAO::create()`) only runs when you go
@@ -13,7 +14,7 @@ would silently break organization -> individual membership sync.
 
 ## The `$workflowUpdateDepth` guard
 
-`Utils::runWorkflowUpdate()` wraps every `Membership.create` call this
+`Utils::runWorkflowUpdate()` wraps every `Membership.update` API4 call this
 extension makes (from `applyAction()` and `markCurrentOnPayment()`) with a
 depth counter (`$workflowUpdateDepth`). While that counter is above zero,
 `preserveWorkflowStatusOnEdit()` (the `hook_civicrm_pre` guard, below)
@@ -137,7 +138,7 @@ permission) is handled by `CRM_Membershipapprovalworkflow_Form_Approve`:
   $values['approval_action'])`, which validates the action is still legal
   for the membership's current status, builds the appropriate `status_id`
   (and, for "Approved", the recalculated dates), and applies it via
-  `Membership.create`. Depending on which action it was, it then sends one
+  `Membership.update` API4. Depending on which action it was, it then sends one
   of two notification emails (each independently switchable from
   **Administer > CiviMember > Membership Approval Workflow Notifications**)
   - see `email-notifications.md`:

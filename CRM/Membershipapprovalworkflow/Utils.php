@@ -1,16 +1,20 @@
 <?php
 
 use CRM_Membershipapprovalworkflow_ExtensionUtil as E;
+use Civi\Api4\Contribution;
+use Civi\Api4\Membership;
+use Civi\Api4\MembershipStatus;
 
 /**
  * Central logic for the membership approval workflow.
  *
  * Every status/date change made here goes through the standard
- * Membership.create API so that CiviCRM core's own related-membership
+ * Membership.update API4 action so that CiviCRM core's own related-membership
  * propagation (CRM_Member_BAO_Membership::createRelatedMemberships(),
  * called unconditionally at the end of BAO::create()) keeps the
  * organization membership and its inherited individual memberships in
- * sync. Nothing here talks to the database directly.
+ * sync. MembershipPayment has no API4 entity in the supported CiviCRM core,
+ * so its read-only link lookups use its DAO.
  */
 class CRM_Membershipapprovalworkflow_Utils {
 
@@ -104,6 +108,72 @@ class CRM_Membershipapprovalworkflow_Utils {
   }
 
   /**
+   * Load a membership through API4 and fail consistently when it is missing.
+   *
+   * @param int $membershipId
+   * @param array $select
+   * @return array
+   * @throws \CRM_Core_Exception
+   */
+  public static function getMembership($membershipId, array $select = ['*']) {
+    $membership = Membership::get(FALSE)
+      ->addSelect(...$select)
+      ->addWhere('id', '=', $membershipId)
+      ->execute()
+      ->first();
+    if (!$membership) {
+      throw new CRM_Core_Exception(E::ts('Membership %1 was not found.', [1 => $membershipId]));
+    }
+    return $membership;
+  }
+
+  /**
+   * Update a membership through API4. skipStatusCal is an API3-only control
+   * and is intentionally omitted because API4 Membership.update does not run
+   * the legacy status calculator.
+   *
+   * @param array $params
+   * @return array
+   */
+  private static function updateMembership(array $params) {
+    $membershipId = $params['id'];
+    unset($params['id'], $params['skipStatusCal']);
+    return Membership::update(FALSE)
+      ->addWhere('id', '=', $membershipId)
+      ->setValues($params)
+      ->execute()
+      ->first();
+  }
+
+  /**
+   * Retrieve IDs from the legacy MembershipPayment bridge table. CiviCRM 6.16
+   * does not expose MembershipPayment as an API4 entity.
+   *
+   * @param string $filterField
+   * @param int $filterValue
+   * @param string $returnField
+   * @return array<int,int>
+   */
+  private static function getMembershipPaymentLinkedIds($filterField, $filterValue, $returnField = 'contribution_id') {
+    $membershipPayment = new CRM_Member_DAO_MembershipPayment();
+    if ($filterField === 'membership_id') {
+      $membershipPayment->membership_id = $filterValue;
+    }
+    else {
+      $membershipPayment->contribution_id = $filterValue;
+    }
+    $membershipPayment->find();
+    $ids = [];
+    while ($membershipPayment->fetch()) {
+      $id = $returnField === 'membership_id'
+        ? $membershipPayment->membership_id
+        : $membershipPayment->contribution_id;
+      $ids[] = (int) $id;
+    }
+    return $ids;
+  }
+
+  /**
    * Disable core's New status while recording its prior state exactly once.
    *
    * The setting is retained while enabled so an enable/disable cycle restores
@@ -123,10 +193,10 @@ class CRM_Membershipapprovalworkflow_Utils {
       );
     }
 
-    civicrm_api3('MembershipStatus', 'create', [
-      'id' => $newStatusId,
-      'is_active' => 0,
-    ]);
+    MembershipStatus::update(FALSE)
+      ->addWhere('id', '=', $newStatusId)
+      ->setValues(['is_active' => FALSE])
+      ->execute();
   }
 
   /**
@@ -168,10 +238,10 @@ class CRM_Membershipapprovalworkflow_Utils {
         $settings->revert(self::SETTING_NEW_STATUS_WAS_ACTIVE);
         return;
       }
-      civicrm_api3('MembershipStatus', 'create', [
-        'id' => $newStatusId,
-        'is_active' => (int) $wasActive,
-      ]);
+      MembershipStatus::update(FALSE)
+        ->addWhere('id', '=', $newStatusId)
+        ->setValues(['is_active' => (bool) $wasActive])
+        ->execute();
     }
     $settings->revert(self::SETTING_NEW_STATUS_WAS_ACTIVE);
   }
@@ -261,26 +331,24 @@ class CRM_Membershipapprovalworkflow_Utils {
    * @return bool
    */
   public static function hasReceivedPayment($membershipId) {
-    $membershipPayments = civicrm_api3('MembershipPayment', 'get', [
-      'membership_id' => $membershipId,
-      'return' => ['contribution_id'],
-    ])['values'];
-    if (!$membershipPayments) {
+    $contributionIds = self::getMembershipPaymentLinkedIds('membership_id', $membershipId);
+    if (!$contributionIds) {
       return FALSE;
     }
 
-    $contributionIds = array_column($membershipPayments, 'contribution_id');
-    $latestContribution = civicrm_api3('Contribution', 'get', [
-      'id' => ['IN' => $contributionIds],
-      'return' => ['contribution_status_id'],
-      'options' => ['sort' => 'receive_date DESC', 'limit' => 1],
-    ])['values'];
+    $latestContribution = Contribution::get(FALSE)
+      ->addSelect('contribution_status_id')
+      ->addWhere('id', 'IN', $contributionIds)
+      ->addOrderBy('receive_date', 'DESC')
+      ->setLimit(1)
+      ->execute()
+      ->first();
     if (!$latestContribution) {
       return FALSE;
     }
 
     $completedStatusId = CRM_Core_PseudoConstant::getKey('CRM_Contribute_BAO_Contribution', 'contribution_status_id', 'Completed');
-    $latestStatusId = reset($latestContribution)['contribution_status_id'];
+    $latestStatusId = $latestContribution['contribution_status_id'];
     return (int) $latestStatusId === (int) $completedStatusId;
   }
 
@@ -383,11 +451,11 @@ class CRM_Membershipapprovalworkflow_Utils {
    *   One of the ACTION_* constants.
    *
    * @return array
-   *   The updated membership (api3 Membership.create result values).
+   *   The updated membership (API4 Membership.update result values).
    * @throws \CRM_Core_Exception
    */
   public static function applyAction($membershipId, $action) {
-    $membership = civicrm_api3('Membership', 'getsingle', ['id' => $membershipId]);
+    $membership = self::getMembership($membershipId);
     self::assertPrimaryMembership($membership);
     $currentStatusName = self::getStatusNameById($membership['status_id']);
     $allowedActions = self::getAllowedActions($currentStatusName, self::hasReceivedPayment($membershipId));
@@ -400,7 +468,6 @@ class CRM_Membershipapprovalworkflow_Utils {
 
     $params = [
       'id' => $membershipId,
-      'skipStatusCal' => TRUE,
       'is_override' => 0,
       'status_override_end_date' => '',
     ];
@@ -423,8 +490,8 @@ class CRM_Membershipapprovalworkflow_Utils {
         throw new CRM_Core_Exception(E::ts('Unknown membership approval action: %1', [1 => $action]));
     }
 
-    $result = self::runWorkflowUpdate(static function () use ($params, $membershipId) {
-      return civicrm_api3('Membership', 'create', $params)['values'][$membershipId] ?? [];
+    $result = self::runWorkflowUpdate(static function () use ($params) {
+      return self::updateMembership($params);
     });
 
     if ($action === self::ACTION_UNDER_REVIEW) {
@@ -576,18 +643,17 @@ class CRM_Membershipapprovalworkflow_Utils {
    *   Y-m-d (or any CRM_Utils_Date-parseable) date the payment was received.
    */
   public static function markCurrentOnPayment($membershipId, $paymentDate) {
-    $membership = civicrm_api3('Membership', 'getsingle', ['id' => $membershipId]);
+    $membership = self::getMembership($membershipId);
     $params = [
       'id' => $membershipId,
       'contact_id' => $membership['contact_id'],
-      'skipStatusCal' => TRUE,
       'is_override' => 0,
       'status_override_end_date' => '',
       'status_id' => self::getStatusIdByName(self::STATUS_CURRENT),
     ];
     $params += self::datesForStart($membership, $paymentDate);
     return self::runWorkflowUpdate(static function () use ($params) {
-      return civicrm_api3('Membership', 'create', $params);
+      return self::updateMembership($params);
     });
   }
 
@@ -601,17 +667,16 @@ class CRM_Membershipapprovalworkflow_Utils {
    * @param int $membershipId
    */
   public static function markPendingApprovalPaymentReceived($membershipId) {
-    $membership = civicrm_api3('Membership', 'getsingle', ['id' => $membershipId]);
+    $membership = self::getMembership($membershipId);
     $params = [
       'id' => $membershipId,
       'contact_id' => $membership['contact_id'],
-      'skipStatusCal' => TRUE,
       'is_override' => 0,
       'status_override_end_date' => '',
       'status_id' => self::getStatusIdByName(self::STATUS_PENDING_APPROVAL_PAYMENT_RECEIVED),
     ];
     return self::runWorkflowUpdate(static function () use ($params) {
-      return civicrm_api3('Membership', 'create', $params);
+      return self::updateMembership($params);
     });
   }
 
@@ -664,11 +729,13 @@ class CRM_Membershipapprovalworkflow_Utils {
     if (!$activeStatusIds) {
       return FALSE;
     }
-    return (bool) civicrm_api3('Membership', 'getcount', [
-      'contact_id' => $params['contact_id'],
-      'membership_type_id' => $params['membership_type_id'],
-      'status_id' => ['IN' => $activeStatusIds],
-    ]);
+    return (bool) Membership::get(FALSE)
+      ->addWhere('contact_id', '=', $params['contact_id'])
+      ->addWhere('membership_type_id', '=', $params['membership_type_id'])
+      ->addWhere('status_id', 'IN', $activeStatusIds)
+      ->selectRowCount()
+      ->execute()
+      ->count();
   }
 
   /**
@@ -720,18 +787,18 @@ class CRM_Membershipapprovalworkflow_Utils {
    *    unaffected and stays Pending, per existing behavior.
    */
   public static function handleContributionCompleted($contributionId) {
-    $paymentDate = civicrm_api3('Contribution', 'getvalue', [
-      'id' => $contributionId,
-      'return' => 'receive_date',
-    ]);
+    $contribution = Contribution::get(FALSE)
+      ->addSelect('receive_date')
+      ->addWhere('id', '=', $contributionId)
+      ->execute()
+      ->first();
+    if (!$contribution) {
+      throw new CRM_Core_Exception(E::ts('Contribution %1 was not found.', [1 => $contributionId]));
+    }
+    $paymentDate = $contribution['receive_date'];
 
-    $membershipPayments = civicrm_api3('MembershipPayment', 'get', [
-      'contribution_id' => $contributionId,
-      'return' => ['membership_id'],
-    ])['values'];
-
-    foreach ($membershipPayments as $membershipPayment) {
-      $membershipId = $membershipPayment['membership_id'];
+    $membershipIds = self::getMembershipPaymentLinkedIds('contribution_id', $contributionId, 'membership_id');
+    foreach ($membershipIds as $membershipId) {
       $statusId = CRM_Core_DAO::getFieldValue('CRM_Member_DAO_Membership', $membershipId, 'status_id');
       $statusName = self::getStatusNameById($statusId);
       if ($statusName === self::STATUS_APPROVED_PENDING_PAYMENT) {
@@ -778,17 +845,16 @@ class CRM_Membershipapprovalworkflow_Utils {
       return FALSE;
     }
 
-    $membership = civicrm_api3('Membership', 'getsingle', [
-      'id' => $membershipId,
-      'return' => ['contact_id', 'membership_type_id'],
-    ]);
+    $membership = self::getMembership($membershipId, ['contact_id', 'membership_type_id']);
 
-    return (bool) civicrm_api3('Membership', 'getcount', [
-      'id' => ['!=' => $membershipId],
-      'contact_id' => $membership['contact_id'],
-      'membership_type_id' => $membership['membership_type_id'],
-      'status_id' => $expiredStatusId,
-    ]);
+    return (bool) Membership::get(FALSE)
+      ->addWhere('id', '!=', $membershipId)
+      ->addWhere('contact_id', '=', $membership['contact_id'])
+      ->addWhere('membership_type_id', '=', $membership['membership_type_id'])
+      ->addWhere('status_id', '=', $expiredStatusId)
+      ->selectRowCount()
+      ->execute()
+      ->count();
   }
 
   /**

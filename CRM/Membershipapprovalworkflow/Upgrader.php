@@ -1,5 +1,7 @@
 <?php
 
+use Civi\Api4\MessageTemplate;
+
 /**
  * Upgrade steps for Membership Approval Workflow.
  */
@@ -23,12 +25,11 @@ class CRM_Membershipapprovalworkflow_Upgrader extends CRM_Extension_Upgrader_Bas
       'https://www.naatp.org/civicrm/my-dashboard?id={contact.contact_id}&{contact.checksum}',
       'https://www.naatp.org/civicrm/my-dashboard?id={contact.contact_id}&amp;{contact.checksum}',
     ];
-    $templates = civicrm_api3('MessageTemplate', 'get', [
-      'workflow_name' => 'membershipapprovalworkflow_under_review_approved',
-      'is_reserved' => 0,
-      'return' => ['id', 'msg_html', 'msg_text'],
-      'options' => ['limit' => 0],
-    ])['values'];
+    $templates = MessageTemplate::get(FALSE)
+      ->addSelect('id', 'msg_html', 'msg_text')
+      ->addWhere('workflow_name', '=', 'membershipapprovalworkflow_under_review_approved')
+      ->addWhere('is_reserved', '=', FALSE)
+      ->execute();
 
     foreach ($templates as $template) {
       $html = str_replace(
@@ -42,11 +43,13 @@ class CRM_Membershipapprovalworkflow_Upgrader extends CRM_Extension_Upgrader_Bas
         $template['msg_text'] ?? ''
       );
       if ($html !== ($template['msg_html'] ?? '') || $text !== ($template['msg_text'] ?? '')) {
-        civicrm_api3('MessageTemplate', 'create', [
-          'id' => $template['id'],
-          'msg_html' => $html,
-          'msg_text' => $text,
-        ]);
+        MessageTemplate::update(FALSE)
+          ->addWhere('id', '=', $template['id'])
+          ->setValues([
+            'msg_html' => $html,
+            'msg_text' => $text,
+          ])
+          ->execute();
       }
     }
     return TRUE;

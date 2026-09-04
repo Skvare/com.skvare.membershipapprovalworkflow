@@ -103,7 +103,6 @@ set:
   working correctly afterwards.
 - `is_override = 0`, `status_override_end_date = ''` - any prior manual
   status override is cleared.
-- `skipStatusCal = TRUE` - the status is set explicitly, not recalculated.
 
 ## Inherited (organization) memberships
 
@@ -116,5 +115,5 @@ touched directly by this workflow:
   it at all - only the primary (owner) membership gets the link.
 
 Approving the *owner* membership propagates to its inherited memberships
-automatically, because every status change in this extension goes through
-the standard `Membership.create` API (see `architecture.md`).
+automatically, because every workflow status change in this extension goes
+through the standard `Membership.update` API4 action (see `architecture.md`).

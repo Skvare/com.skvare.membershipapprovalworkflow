@@ -1,5 +1,6 @@
 <?php
 
+use Civi\Api4\MessageTemplate;
 use Civi\Test\CiviEnvBuilder;
 use Civi\Test\HeadlessInterface;
 use Civi\Test\TransactionalInterface;
@@ -49,27 +50,30 @@ class CRM_Membershipapprovalworkflow_UtilsTest extends \PHPUnit\Framework\TestCa
   }
 
   public function testEditableTemplateLegacyPaymentUrlIsMigrated(): void {
-    $templates = civicrm_api3('MessageTemplate', 'get', [
-      'workflow_name' => 'membershipapprovalworkflow_under_review_approved',
-      'is_reserved' => 0,
-      'return' => ['id'],
-    ])['values'];
-    $template = reset($templates);
-    $this->assertNotFalse($template);
+    $templates = MessageTemplate::get(FALSE)
+      ->addSelect('id')
+      ->addWhere('workflow_name', '=', 'membershipapprovalworkflow_under_review_approved')
+      ->addWhere('is_reserved', '=', FALSE)
+      ->execute();
+    $template = $templates->first();
+    $this->assertNotEmpty($template);
     $legacyUrl = 'https://www.naatp.org/civicrm/my-dashboard?id={contact.contact_id}&{contact.checksum}';
-    civicrm_api3('MessageTemplate', 'create', [
-      'id' => $template['id'],
-      'msg_html' => '<a href="' . $legacyUrl . '">Pay now</a>',
-      'msg_text' => $legacyUrl,
-    ]);
+    MessageTemplate::update(FALSE)
+      ->addWhere('id', '=', $template['id'])
+      ->setValues([
+        'msg_html' => '<a href="' . $legacyUrl . '">Pay now</a>',
+        'msg_text' => $legacyUrl,
+      ])
+      ->execute();
 
     $upgrader = new CRM_Membershipapprovalworkflow_Upgrader();
     $this->assertTrue($upgrader->upgrade_1002());
 
-    $updatedTemplate = civicrm_api3('MessageTemplate', 'getsingle', [
-      'id' => $template['id'],
-      'return' => ['msg_html', 'msg_text'],
-    ]);
+    $updatedTemplate = MessageTemplate::get(FALSE)
+      ->addSelect('msg_html', 'msg_text')
+      ->addWhere('id', '=', $template['id'])
+      ->execute()
+      ->first();
     $this->assertStringNotContainsString($legacyUrl, $updatedTemplate['msg_html']);
     $this->assertStringNotContainsString($legacyUrl, $updatedTemplate['msg_text']);
     $this->assertStringContainsString('{crmURL', $updatedTemplate['msg_html']);

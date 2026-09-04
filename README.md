@@ -54,7 +54,8 @@ membership record.
   Installations upgraded from 1.0.0 retain that release's documented
   uninstall behavior and restore New as active, because 1.0.0 did not retain
   its prior state.
-- All changes are applied through the standard `Membership.create` API,
+- All workflow status/date changes are applied through the standard
+  `Membership.update` API4 action,
   so CiviCRM core's own inherited-membership sync
   (`CRM_Member_BAO_Membership::createRelatedMemberships()`) automatically
   keeps an organization's membership and its related individual
