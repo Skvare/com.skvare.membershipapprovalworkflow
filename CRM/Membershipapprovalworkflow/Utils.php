@@ -24,7 +24,6 @@ class CRM_Membershipapprovalworkflow_Utils {
   const STATUS_PENDING_APPROVAL_PAYMENT_RECEIVED = 'Pending Approval/Payment Received';
   const STATUS_CURRENT = 'Current';
   const STATUS_GRACE = 'Grace';
-  const STATUS_EXPIRED = 'Expired';
 
   const SETTING_NEW_STATUS_WAS_ACTIVE = 'membershipapprovalworkflow_new_status_was_active';
 
@@ -807,14 +806,11 @@ class CRM_Membershipapprovalworkflow_Utils {
    *    Current with start date = payment date (requirements 2D / 5).
    *  - if that membership is still the initial "Pending" (i.e. payment
    *    was made at signup rather than pay-later, before staff have
-   *    reviewed it):
-   *    - and it's a renewal of an Expired membership of the same type for
-   *      the same contact (see isRenewalOfExpiredMembership()) - move it
-   *      straight to Current. The contact already held this membership
-   *      before; there's nothing new here for staff to review.
-   *    - otherwise (a genuinely new application) - move it to "Pending
-   *      Approval/Payment Received" so staff can see payment has already
-   *      been received.
+   *    reviewed it) - move it to "Pending Approval/Payment Received" so
+   *    staff can see payment has already been received. This applies
+   *    equally to a renewal of a previously Expired membership: it still
+   *    goes through the full review process rather than being activated
+   *    directly.
    *    A pay-later membership whose contribution is never completed is
    *    unaffected and stays Pending, per existing behavior.
    */
@@ -837,56 +833,9 @@ class CRM_Membershipapprovalworkflow_Utils {
         self::markCurrentOnPayment($membershipId, $paymentDate);
       }
       elseif ($statusName === self::STATUS_PENDING) {
-        if (self::isRenewalOfExpiredMembership($membershipId)) {
-          // Core creates a brand-new membership row for a renewal of an
-          // Expired membership (rather than editing the old row), so this
-          // lands here indistinguishable from a fresh signup at first
-          // glance. It isn't one - the contact already held this
-          // membership type before, so there's nothing new to review.
-          // Skip the approval queue entirely and activate it directly.
-          self::markCurrentOnPayment($membershipId, $paymentDate);
-        }
-        else {
-          self::markPendingApprovalPaymentReceived($membershipId);
-        }
+        self::markPendingApprovalPaymentReceived($membershipId);
       }
     }
-  }
-
-  /**
-   * True if this membership qualifies for the expired-member approval
-   * exemption. The policy deliberately treats any prior Expired membership
-   * of the same type for the same contact as a renewal/returning-member
-   * application, even when CiviCRM does not provide a direct renewal or
-   * contribution link between the two rows. Returning applicants of that
-   * type therefore bypass staff review once payment is received.
-   *
-   * Needed because core (as configured on this site) creates a brand-new
-   * membership row for a renewal of an Expired membership instead of
-   * editing the old row, so `handleContributionCompleted()` can't tell a
-   * first-time application apart from this policy-defined renewal just by
-   * looking at the membership's own `id`/status history - it has to check
-   * for a sibling row.
-   *
-   * @param int $membershipId
-   * @return bool
-   */
-  private static function isRenewalOfExpiredMembership($membershipId) {
-    $expiredStatusId = self::getStatusIdByName(self::STATUS_EXPIRED);
-    if (!$expiredStatusId) {
-      return FALSE;
-    }
-
-    $membership = self::getMembership($membershipId, ['contact_id', 'membership_type_id']);
-
-    return (bool) Membership::get(FALSE)
-      ->addWhere('id', '!=', $membershipId)
-      ->addWhere('contact_id', '=', $membership['contact_id'])
-      ->addWhere('membership_type_id', '=', $membership['membership_type_id'])
-      ->addWhere('status_id', '=', $expiredStatusId)
-      ->selectRowCount()
-      ->execute()
-      ->count();
   }
 
   /**

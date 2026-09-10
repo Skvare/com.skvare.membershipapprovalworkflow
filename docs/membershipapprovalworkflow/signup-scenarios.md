@@ -68,44 +68,33 @@ new membership row** via a genuine `Membership.create` with `$op ===
 'create'` - not an in-place edit of the old (Expired) row. That means it
 reaches this extension exactly like Scenarios 1-2 above:
 `Utils::forcePendingOnCreate()` runs, forces `status_id` = Pending, and (if
-paid immediately) `handleContributionCompleted()` would - prior to the fix
-below - promote it straight to `Pending Approval/Payment Received`, exactly
-as if it were a first-time application. That's wrong: the contact already
-held this membership type before, so there's nothing new for staff to
-review.
+paid immediately) `handleContributionCompleted()` promotes it to `Pending
+Approval/Payment Received`, exactly as if it were a first-time application.
 
-### Policy: skip the review queue for a returning same-type member
+### Policy (updated 2026-09-10): always route through the review queue
 
-`Utils::handleContributionCompleted()`'s `Pending` branch now calls
-`Utils::isRenewalOfExpiredMembership($membershipId)` before deciding what
-  to do: it checks whether the same contact holds *another* membership record
-  of the *same* `membership_type_id` currently sitting in `Expired`. This is
-  deliberately a returning-member policy, not an attempt to prove a direct
-  renewal relationship: no matching contribution, date window, or renewal
-  link is required. If the historical Expired row exists, the application is
-  treated as a renewal rather than a first-time application:
+A prior version of this extension exempted a returning same-type member
+from review: `Utils::handleContributionCompleted()`'s `Pending` branch used
+to call a helper (`isRenewalOfExpiredMembership()`) that checked whether the
+same contact held *another* membership record of the *same*
+`membership_type_id` currently sitting in `Expired`, and if so, skipped
+straight to `Current` without ever hitting the approval screen. **That
+exemption has been removed.** A renewal of an Expired membership now
+behaves identically to a first-time application:
 
-- **Renewal of an Expired membership, paid (immediately or once a
-  pay-later contribution eventually completes while still Pending):** goes
-  straight to **`Current`** via `Utils::markCurrentOnPayment()` - the same
-  helper used for the "Approved/Pending Payment -> Current" auto-transition
-  - **never** `Pending Approval/Payment Received`, and never seen on the
-  approval screen.
-- **First-time application, paid** (no other same-type Expired row):
-  unchanged from Scenario 1 - goes to `Pending Approval/Payment Received`
-  and still needs staff review.
+- **Renewal of an Expired membership, paid immediately:** goes to `Pending
+  Approval/Payment Received`, same as Scenario 1 - still needs staff review.
+- **First-time application, paid:** unchanged from Scenario 1 - goes to
+  `Pending Approval/Payment Received` and still needs staff review.
 - **Renewal of an Expired membership, pay-later, not yet paid:** still
-  starts `Pending` like any other pay-later signup (Scenario 2) - the check
-  only runs once a payment actually completes. If staff move it to `Under
-  Review` before payment arrives, it's indistinguishable from a normal
-  pay-later application from that point on and follows the normal dropdown
-  (`Approved/Pending Payment` -> auto-`Current` on payment, same as
-  Scenario 2's ending - it doesn't skip anything, since by then it's no
-  longer sitting in plain `Pending` for the check to catch).
+  starts `Pending` like any other pay-later signup (Scenario 2), and follows
+  the same dropdown/auto-transition path once payment completes.
 
 This does **not** touch `forcePendingOnCreate()` - the membership still
-starts life as plain `Pending` either way; the only change is which status
-it's promoted *to* once payment is confirmed while it's still unreviewed.
+starts life as plain `Pending` either way; the change is only that
+`handleContributionCompleted()` no longer distinguishes a returning member's
+renewal from a first-time application - both now converge on
+`Utils::markPendingApprovalPaymentReceived()`.
 
 ### Open question: how does this relate to `nz.co.fuzion.membershiprenewalcontrol`?
 
@@ -232,15 +221,15 @@ when the attached contribution is itself `Pending`.
 
 ### Practical implications
 
-- For the online renewal path, the confirmed behavior (Scenario 3's fix
-  above) is now the intended one: payment already received on a same-type
-  renewal skips straight to Current, no staff review. If some *other*
-  renewal path (e.g. the back-office admin form) still routes through
-  `nz.co.fuzion.membershiprenewalcontrol`'s edit-to-insert conversion
-  instead, that path would bypass this extension entirely rather than
-  going through `isRenewalOfExpiredMembership()` - worth confirming
-  whether that's acceptable or whether that path also needs to route
-  through a real `create` the way the online path now does.
+- For the online renewal path, per the updated Scenario 3 policy, a
+  same-type renewal no longer skips review - it goes through `Pending
+  Approval/Payment Received` and staff review like any other application.
+  If some *other* renewal path (e.g. the back-office admin form) still
+  routes through `nz.co.fuzion.membershiprenewalcontrol`'s edit-to-insert
+  conversion instead, that path bypasses this extension entirely - worth
+  confirming whether that's acceptable or whether that path also needs to
+  route through a real `create` the way the online path now does, so it
+  too goes through staff review.
 - This nz.co.fuzion analysis is read from source, not from a live-traced
   request. The extension
   itself calls `CRM_Core_Error::debug_var()` at every branch - enabling
