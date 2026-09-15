@@ -43,6 +43,8 @@ class CRM_Membershipapprovalworkflow_Utils {
   const SETTING_NOTIFY_UNDER_REVIEW = 'membershipapprovalworkflow_notify_under_review';
   const SETTING_NOTIFY_APPROVED_PENDING_PAYMENT = 'membershipapprovalworkflow_notify_approved_pending_payment';
   const SETTING_NOTIFY_APPROVED = 'membershipapprovalworkflow_notify_approved';
+  const SETTING_NOTIFY_DENIED = 'membershipapprovalworkflow_notify_denied';
+  const SETTING_NOTIFY_NOT_FULFILLED = 'membershipapprovalworkflow_notify_not_fulfilled';
 
   /**
    * Action keys used by the approval dropdown, in display order.
@@ -287,6 +289,11 @@ class CRM_Membershipapprovalworkflow_Utils {
         ->addWhere('id', '=', $typoId)
         ->setValues(['name' => self::STATUS_NOT_FULFILLED])
         ->execute();
+      // getStatusIdByName() cached this as NULL (nothing named "Not
+      // Fulfilled" existed yet) just above - drop that now-stale cache
+      // entry so a lookup later in this same request re-queries and finds
+      // the row we just renamed, instead of getting back the cached NULL.
+      unset(self::$statusIdCache[self::STATUS_NOT_FULFILLED]);
       return;
     }
 
@@ -600,6 +607,12 @@ class CRM_Membershipapprovalworkflow_Utils {
       // that only $result reflects.
       self::sendUnderReviewApprovedNotification($result + $membership, self::getStatusNameById($params['status_id']));
     }
+    elseif ($action === self::ACTION_DENIED) {
+      self::sendDeniedNotification($result + $membership);
+    }
+    elseif ($action === self::ACTION_NOT_FULFILLED) {
+      self::sendNotFulfilledNotification($result + $membership);
+    }
 
     return $result;
   }
@@ -723,6 +736,116 @@ class CRM_Membershipapprovalworkflow_Utils {
     }
     catch (CRM_Core_Exception $e) {
       Civi::log()->error('membershipapprovalworkflow: failed to send approval notification for membership {membershipId}: {message}', [
+        'membershipId' => $membership['id'],
+        'message' => $e->getMessage(),
+      ]);
+    }
+  }
+
+  /**
+   * Email the member when staff move their membership from "Under Review"
+   * to "Denied" - the ACTION_DENIED branch of applyAction(). Gated by the
+   * SETTING_NOTIFY_DENIED setting - see
+   * CRM_Membershipapprovalworkflow_Form_Settings.
+   *
+   * Never lets a notification failure (missing/suppressed email, mail
+   * transport error) block the approval itself - the status change has
+   * already been committed by the time this runs.
+   */
+  private static function sendDeniedNotification(array $membership) {
+    if (!Civi::settings()->get(self::SETTING_NOTIFY_DENIED)) {
+      return;
+    }
+
+    $contactId = $membership['contact_id'];
+    $toEmail = CRM_Contact_BAO_Contact::getPrimaryEmail($contactId, TRUE);
+    if (!$toEmail) {
+      Civi::log()->info('membershipapprovalworkflow: no deliverable primary email for contact {contactId}, skipping denied notification for membership {membershipId}.', [
+        'contactId' => $contactId,
+        'membershipId' => $membership['id'],
+      ]);
+      return;
+    }
+
+    $membershipTypeName = CRM_Core_DAO::getFieldValue(
+      'CRM_Member_DAO_MembershipType',
+      $membership['membership_type_id'],
+      'name'
+    );
+
+    try {
+      $result = CRM_Core_BAO_MessageTemplate::sendTemplate([
+        'workflow' => 'membershipapprovalworkflow_denied',
+        'contactId' => $contactId,
+        'toEmail' => $toEmail,
+        'tplParams' => [
+          'membershipTypeName' => $membershipTypeName,
+        ],
+      ]);
+      if (empty($result[0])) {
+        Civi::log()->error('membershipapprovalworkflow: denied notification could not be sent for membership {membershipId}: {message}', [
+          'membershipId' => $membership['id'],
+          'message' => $result[4] ?: 'Unknown mail transport error',
+        ]);
+      }
+    }
+    catch (CRM_Core_Exception $e) {
+      Civi::log()->error('membershipapprovalworkflow: failed to send denied notification for membership {membershipId}: {message}', [
+        'membershipId' => $membership['id'],
+        'message' => $e->getMessage(),
+      ]);
+    }
+  }
+
+  /**
+   * Email the member when staff move their membership from "Approved/
+   * Pending Payment" to "Not Fulfilled" - the ACTION_NOT_FULFILLED branch
+   * of applyAction(). Gated by the SETTING_NOTIFY_NOT_FULFILLED setting -
+   * see CRM_Membershipapprovalworkflow_Form_Settings.
+   *
+   * Never lets a notification failure (missing/suppressed email, mail
+   * transport error) block the approval itself - the status change has
+   * already been committed by the time this runs.
+   */
+  private static function sendNotFulfilledNotification(array $membership) {
+    if (!Civi::settings()->get(self::SETTING_NOTIFY_NOT_FULFILLED)) {
+      return;
+    }
+
+    $contactId = $membership['contact_id'];
+    $toEmail = CRM_Contact_BAO_Contact::getPrimaryEmail($contactId, TRUE);
+    if (!$toEmail) {
+      Civi::log()->info('membershipapprovalworkflow: no deliverable primary email for contact {contactId}, skipping not-fulfilled notification for membership {membershipId}.', [
+        'contactId' => $contactId,
+        'membershipId' => $membership['id'],
+      ]);
+      return;
+    }
+
+    $membershipTypeName = CRM_Core_DAO::getFieldValue(
+      'CRM_Member_DAO_MembershipType',
+      $membership['membership_type_id'],
+      'name'
+    );
+
+    try {
+      $result = CRM_Core_BAO_MessageTemplate::sendTemplate([
+        'workflow' => 'membershipapprovalworkflow_not_fulfilled',
+        'contactId' => $contactId,
+        'toEmail' => $toEmail,
+        'tplParams' => [
+          'membershipTypeName' => $membershipTypeName,
+        ],
+      ]);
+      if (empty($result[0])) {
+        Civi::log()->error('membershipapprovalworkflow: not-fulfilled notification could not be sent for membership {membershipId}: {message}', [
+          'membershipId' => $membership['id'],
+          'message' => $result[4] ?: 'Unknown mail transport error',
+        ]);
+      }
+    }
+    catch (CRM_Core_Exception $e) {
+      Civi::log()->error('membershipapprovalworkflow: failed to send not-fulfilled notification for membership {membershipId}: {message}', [
         'membershipId' => $membership['id'],
         'message' => $e->getMessage(),
       ]);

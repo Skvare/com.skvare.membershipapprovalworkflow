@@ -2,14 +2,20 @@
 
 ## What triggers it
 
-`Utils::applyAction()` sends one notification email for each of the three
-status-changing actions on the approval screen:
+`Utils::applyAction()` sends one notification email for each of the
+status-changing actions on the approval screen that has a template:
 
 | Action (from -> to) | Template `workflow_name` | Gated by setting |
 |---|---|---|
 | Pending or Pending Approval/Payment Received -> Under Review | `membershipapprovalworkflow_under_review` | `membershipapprovalworkflow_notify_under_review` |
 | Under Review -> Approved/Pending Payment | `membershipapprovalworkflow_under_review_approved` | `membershipapprovalworkflow_notify_approved_pending_payment` |
 | Under Review -> Approved (Current) | `membershipapprovalworkflow_under_review_approved` (same template as above - branches on `$newStatusName`) | `membershipapprovalworkflow_notify_approved` |
+| Under Review -> Denied | `membershipapprovalworkflow_denied` | `membershipapprovalworkflow_notify_denied` |
+| Approved/Pending Payment -> Not Fulfilled | `membershipapprovalworkflow_not_fulfilled` | `membershipapprovalworkflow_notify_not_fulfilled` |
+
+No notification is sent for Suspended, Removed, Expired, Cancelled, or
+Cancelled by Member - `applyAction()` has no `send*Notification()` call for
+those actions.
 
 Each setting is checked at the top of the corresponding `Utils::send*()`
 method (`Civi::settings()->get($settingName)`) - if disabled, the method
@@ -62,7 +68,25 @@ three companion files in the same directory:
 - `under_review_approved_html.tpl`
 - `under_review_approved_text.tpl`
 
-Both templates follow the same reserved/editable pair pattern CiviCRM core
+### Denied (`membershipapprovalworkflow_denied`)
+
+Registered as a managed entity in `managed/MessageTemplate_Denied.mgd.php`.
+Content lives in:
+
+- `denied_subject.tpl`
+- `denied_html.tpl`
+- `denied_text.tpl`
+
+### Not Fulfilled (`membershipapprovalworkflow_not_fulfilled`)
+
+Registered as a managed entity in
+`managed/MessageTemplate_NotFulfilled.mgd.php`. Content lives in:
+
+- `not_fulfilled_subject.tpl`
+- `not_fulfilled_html.tpl`
+- `not_fulfilled_text.tpl`
+
+All four templates follow the same reserved/editable pair pattern CiviCRM core
 uses for its own system workflow templates (e.g.
 `ext/standaloneusers/managed/MessageTemplate_PasswordReset.mgd.php`): two
 rows are created per template:
@@ -92,7 +116,8 @@ save.
 
 Passed via `tplParams`:
 
-`Utils::sendUnderReviewNotification()`:
+`Utils::sendUnderReviewNotification()`, `Utils::sendDeniedNotification()`,
+and `Utils::sendNotFulfilledNotification()` all pass the same one token:
 
 | Token | Value |
 |---|---|
@@ -113,7 +138,7 @@ method passes `contactId`, which populates `tokenContext`), e.g.
 
 ## Recipient resolution
 
-Both `send*()` methods look up the contact's **primary** email via
+All `send*()` methods look up the contact's **primary** email via
 `CRM_Contact_BAO_Contact::getPrimaryEmail($contactId, TRUE)` - the `TRUE`
 (`$polite`) argument means a contact with `do_not_email` set, or whose
 primary email is `on_hold`, is skipped rather than emailed. If no
@@ -123,7 +148,7 @@ approval action.
 
 ## Failure handling
 
-Both methods wrap `CRM_Core_BAO_MessageTemplate::sendTemplate()` in a
+All methods wrap `CRM_Core_BAO_MessageTemplate::sendTemplate()` in a
 `try`/`catch (CRM_Core_Exception $e)`. A send failure (e.g. the template
 row is somehow missing, or the mail transport errors) is logged at
 `error` level and otherwise swallowed - **the membership status change
@@ -137,10 +162,12 @@ failure never rolls back or blocks the approval itself.
 notification. Unchecking it does not touch the message template or the
 underlying status change - it only stops that specific `send*()` call from
 running, checked via `Civi::settings()->get()` before anything else in the
-method happens (no email lookup, no template render). The three settings
+method happens (no email lookup, no template render). The five settings
 (`membershipapprovalworkflow_notify_under_review`,
 `membershipapprovalworkflow_notify_approved_pending_payment`,
-`membershipapprovalworkflow_notify_approved`) are declared in
+`membershipapprovalworkflow_notify_approved`,
+`membershipapprovalworkflow_notify_denied`,
+`membershipapprovalworkflow_notify_not_fulfilled`) are declared in
 `settings/MembershipApprovalWorkflow.setting.php` and default to enabled.
 
 ## Customizing the email
