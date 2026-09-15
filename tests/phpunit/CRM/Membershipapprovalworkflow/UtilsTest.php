@@ -92,13 +92,56 @@ class CRM_Membershipapprovalworkflow_UtilsTest extends \PHPUnit\Framework\TestCa
       CRM_Membershipapprovalworkflow_Utils::STATUS_UNDER_REVIEW,
       FALSE
     );
-    $this->assertSame([CRM_Membershipapprovalworkflow_Utils::ACTION_APPROVED_PENDING_PAYMENT], array_keys($unpaidActions));
+    $this->assertSame(
+      [CRM_Membershipapprovalworkflow_Utils::ACTION_APPROVED_PENDING_PAYMENT, CRM_Membershipapprovalworkflow_Utils::ACTION_DENIED],
+      array_keys($unpaidActions)
+    );
 
     $paidActions = CRM_Membershipapprovalworkflow_Utils::getAllowedActions(
       CRM_Membershipapprovalworkflow_Utils::STATUS_UNDER_REVIEW,
       TRUE
     );
-    $this->assertSame([CRM_Membershipapprovalworkflow_Utils::ACTION_APPROVED], array_keys($paidActions));
+    $this->assertSame(
+      [CRM_Membershipapprovalworkflow_Utils::ACTION_APPROVED, CRM_Membershipapprovalworkflow_Utils::ACTION_DENIED],
+      array_keys($paidActions)
+    );
+  }
+
+  public function testApprovedPendingPaymentAllowsApprovedOrNotFulfilled(): void {
+    $actions = CRM_Membershipapprovalworkflow_Utils::getAllowedActions(
+      CRM_Membershipapprovalworkflow_Utils::STATUS_APPROVED_PENDING_PAYMENT
+    );
+    $this->assertSame(
+      [CRM_Membershipapprovalworkflow_Utils::ACTION_APPROVED, CRM_Membershipapprovalworkflow_Utils::ACTION_NOT_FULFILLED],
+      array_keys($actions)
+    );
+  }
+
+  public function testCurrentMembershipAllowsSuspendedRemovedOrExpired(): void {
+    $actions = CRM_Membershipapprovalworkflow_Utils::getAllowedActions(
+      CRM_Membershipapprovalworkflow_Utils::STATUS_CURRENT
+    );
+    $this->assertSame(
+      [
+        CRM_Membershipapprovalworkflow_Utils::ACTION_SUSPENDED,
+        CRM_Membershipapprovalworkflow_Utils::ACTION_REMOVED,
+        CRM_Membershipapprovalworkflow_Utils::ACTION_EXPIRED,
+      ],
+      array_keys($actions)
+    );
+  }
+
+  public function testExpiredMembershipAllowsCancelledOrCancelledByMember(): void {
+    $actions = CRM_Membershipapprovalworkflow_Utils::getAllowedActions(
+      CRM_Membershipapprovalworkflow_Utils::STATUS_EXPIRED
+    );
+    $this->assertSame(
+      [
+        CRM_Membershipapprovalworkflow_Utils::ACTION_CANCELLED,
+        CRM_Membershipapprovalworkflow_Utils::ACTION_CANCELLED_BY_MEMBER,
+      ],
+      array_keys($actions)
+    );
   }
 
 }

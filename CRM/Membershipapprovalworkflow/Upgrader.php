@@ -55,4 +55,15 @@ class CRM_Membershipapprovalworkflow_Upgrader extends CRM_Extension_Upgrader_Bas
     return TRUE;
   }
 
+  /**
+   * Fix up a "Not Fullfilled" MembershipStatus name typo that predates
+   * managed/MembershipStatus.mgd.php declaring the correctly-spelled "Not
+   * Fulfilled", so that declaration's `match => ['name']` recognizes the
+   * existing row instead of creating a duplicate.
+   */
+  public function upgrade_1003(): bool {
+    CRM_Membershipapprovalworkflow_Utils::renameNotFulfilledStatusTypo();
+    return TRUE;
+  }
+
 }

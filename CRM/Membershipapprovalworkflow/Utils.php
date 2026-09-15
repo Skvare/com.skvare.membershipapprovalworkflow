@@ -24,6 +24,13 @@ class CRM_Membershipapprovalworkflow_Utils {
   const STATUS_PENDING_APPROVAL_PAYMENT_RECEIVED = 'Pending Approval/Payment Received';
   const STATUS_CURRENT = 'Current';
   const STATUS_GRACE = 'Grace';
+  const STATUS_DENIED = 'Denied';
+  const STATUS_NOT_FULFILLED = 'Not Fulfilled';
+  const STATUS_SUSPENDED = 'Suspended';
+  const STATUS_REMOVED = 'Removed';
+  const STATUS_EXPIRED = 'Expired';
+  const STATUS_CANCELLED = 'Cancelled';
+  const STATUS_CANCELLED_BY_MEMBER = 'Cancelled by Member';
 
   const SETTING_NEW_STATUS_WAS_ACTIVE = 'membershipapprovalworkflow_new_status_was_active';
 
@@ -43,6 +50,13 @@ class CRM_Membershipapprovalworkflow_Utils {
   const ACTION_UNDER_REVIEW = 'under_review';
   const ACTION_APPROVED_PENDING_PAYMENT = 'approved_pending_payment';
   const ACTION_APPROVED = 'approved';
+  const ACTION_DENIED = 'denied';
+  const ACTION_NOT_FULFILLED = 'not_fulfilled';
+  const ACTION_SUSPENDED = 'suspended';
+  const ACTION_REMOVED = 'removed';
+  const ACTION_EXPIRED = 'expired';
+  const ACTION_CANCELLED = 'cancelled';
+  const ACTION_CANCELLED_BY_MEMBER = 'cancelled_by_member';
 
   private static $statusIdCache = [];
 
@@ -246,6 +260,47 @@ class CRM_Membershipapprovalworkflow_Utils {
   }
 
   /**
+   * Fix up a "Not Fullfilled" MembershipStatus name typo that predates
+   * managed/MembershipStatus.mgd.php declaring the correctly-spelled
+   * "Not Fulfilled" (its `match => ['name']` can only recognize an existing
+   * row as the same status if the name actually matches).
+   *
+   * If nothing named "Not Fulfilled" exists yet, the typo'd row is simply
+   * renamed in place - the very next managed-entity reconciliation then
+   * updates it (weight, is_admin, etc.) as normal.
+   *
+   * If a correctly-named row already exists - i.e. reconciliation ran
+   * before this upgrade step and created one fresh - the typo'd row is
+   * retired instead: any memberships still on it are moved onto the
+   * correct status, and the typo'd row is deactivated rather than deleted
+   * (existing reports/logs may reference its ID).
+   */
+  public static function renameNotFulfilledStatusTypo() {
+    $typoId = self::getStatusIdByName('Not Fullfilled');
+    if (!$typoId) {
+      return;
+    }
+    $correctId = self::getStatusIdByName(self::STATUS_NOT_FULFILLED);
+
+    if (!$correctId) {
+      MembershipStatus::update(FALSE)
+        ->addWhere('id', '=', $typoId)
+        ->setValues(['name' => self::STATUS_NOT_FULFILLED])
+        ->execute();
+      return;
+    }
+
+    Membership::update(FALSE)
+      ->addWhere('status_id', '=', $typoId)
+      ->setValues(['status_id' => $correctId])
+      ->execute();
+    MembershipStatus::update(FALSE)
+      ->addWhere('id', '=', $typoId)
+      ->setValues(['is_active' => FALSE])
+      ->execute();
+  }
+
+  /**
    * Reject direct actions against inherited memberships. Core owns their
    * status through createRelatedMemberships() on the primary membership.
    *
@@ -399,7 +454,14 @@ class CRM_Membershipapprovalworkflow_Utils {
    * offer "Approved" only (no reason to route through a "pending payment"
    * holding status for money that's already there); no payment yet ->
    * offer "Approved/Pending Payment" only (staff can't activate a
-   * membership nothing has been paid for).
+   * membership nothing has been paid for). "Denied" is offered alongside
+   * either outcome, since staff can reject an application regardless of
+   * whether payment happens to already be in.
+   *
+   * Beyond the original Pending -> ... -> Current pipeline, a membership
+   * can also move on from "Approved/Pending Payment" (-> Not Fulfilled),
+   * "Current" (-> Suspended / Removed / Expired), and "Expired" (->
+   * Cancelled / Cancelled by Member).
    *
    * @param string $currentStatusName
    * @param bool $paymentReceived
@@ -409,34 +471,40 @@ class CRM_Membershipapprovalworkflow_Utils {
    *   Action key => label.
    */
   public static function getAllowedActions($currentStatusName, $paymentReceived = FALSE) {
-    $actions = [
-      self::ACTION_UNDER_REVIEW => E::ts('Under Review'),
-      self::ACTION_APPROVED_PENDING_PAYMENT => E::ts('Approved/Pending Payment'),
-      self::ACTION_APPROVED => E::ts('Approved'),
-    ];
-
     switch ($currentStatusName) {
       case self::STATUS_PENDING:
       case self::STATUS_PENDING_APPROVAL_PAYMENT_RECEIVED:
-        unset($actions[self::ACTION_APPROVED_PENDING_PAYMENT]);
-        unset($actions[self::ACTION_APPROVED]);
-        return $actions;
+        return [self::ACTION_UNDER_REVIEW => E::ts('Under Review')];
 
       case self::STATUS_UNDER_REVIEW:
-        unset($actions[self::ACTION_UNDER_REVIEW]);
-        if ($paymentReceived) {
-          unset($actions[self::ACTION_APPROVED_PENDING_PAYMENT]);
-        }
-        else {
-          unset($actions[self::ACTION_APPROVED]);
-        }
+        $actions = $paymentReceived
+          ? [self::ACTION_APPROVED => E::ts('Approved')]
+          : [self::ACTION_APPROVED_PENDING_PAYMENT => E::ts('Approved/Pending Payment')];
+        $actions[self::ACTION_DENIED] = E::ts('Denied');
         return $actions;
 
       case self::STATUS_APPROVED_PENDING_PAYMENT:
-        return [self::ACTION_APPROVED => $actions[self::ACTION_APPROVED]];
+        return [
+          self::ACTION_APPROVED => E::ts('Approved'),
+          self::ACTION_NOT_FULFILLED => E::ts('Not Fulfilled'),
+        ];
+
+      case self::STATUS_CURRENT:
+        return [
+          self::ACTION_SUSPENDED => E::ts('Suspended'),
+          self::ACTION_REMOVED => E::ts('Removed'),
+          self::ACTION_EXPIRED => E::ts('Expired'),
+        ];
+
+      case self::STATUS_EXPIRED:
+        return [
+          self::ACTION_CANCELLED => E::ts('Cancelled'),
+          self::ACTION_CANCELLED_BY_MEMBER => E::ts('Cancelled by Member'),
+        ];
 
       default:
-        // Current, Grace, Expired, Cancelled, Deceased, etc. - workflow is done.
+        // Grace, Suspended, Removed, Denied, Not Fulfilled, Cancelled,
+        // Cancelled by Member, Deceased, etc. - workflow is done.
         return [];
     }
   }
@@ -483,6 +551,34 @@ class CRM_Membershipapprovalworkflow_Utils {
       case self::ACTION_APPROVED:
         $params['status_id'] = self::getStatusIdByName(self::STATUS_CURRENT);
         $params += self::datesForStart($membership, CRM_Utils_Time::date('Y-m-d'));
+        break;
+
+      case self::ACTION_DENIED:
+        $params['status_id'] = self::getStatusIdByName(self::STATUS_DENIED);
+        break;
+
+      case self::ACTION_NOT_FULFILLED:
+        $params['status_id'] = self::getStatusIdByName(self::STATUS_NOT_FULFILLED);
+        break;
+
+      case self::ACTION_SUSPENDED:
+        $params['status_id'] = self::getStatusIdByName(self::STATUS_SUSPENDED);
+        break;
+
+      case self::ACTION_REMOVED:
+        $params['status_id'] = self::getStatusIdByName(self::STATUS_REMOVED);
+        break;
+
+      case self::ACTION_EXPIRED:
+        $params['status_id'] = self::getStatusIdByName(self::STATUS_EXPIRED);
+        break;
+
+      case self::ACTION_CANCELLED:
+        $params['status_id'] = self::getStatusIdByName(self::STATUS_CANCELLED);
+        break;
+
+      case self::ACTION_CANCELLED_BY_MEMBER:
+        $params['status_id'] = self::getStatusIdByName(self::STATUS_CANCELLED_BY_MEMBER);
         break;
 
       default:
