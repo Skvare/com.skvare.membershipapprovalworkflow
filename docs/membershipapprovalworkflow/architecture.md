@@ -122,9 +122,31 @@ membership's current status:
 
 On the core `CRM_Member_Form_Membership` form only: freezes the
 `status_id`, `is_override`, and `status_override_end_date` fields if
-present. Membership status is controlled exclusively by the approval
-screen and the payment-completion hook above - never by editing a
-membership directly.
+present, **unless** `Utils::canUseStatusOverride($membershipId)` says
+otherwise. Membership status is controlled exclusively by the approval
+screen and the payment-completion hook above while a membership is still
+mid-workflow - never by editing a membership directly.
+
+`canUseStatusOverride()` allows CiviCRM's native Status Override once a
+membership is no longer in one of `protectedStatusNames()` (Pending,
+Pending Approval/Payment Received, Under Review, Approved/Pending
+Payment), or once its type is out of scope for the workflow entirely
+(`isMembershipTypeInWorkflow()`). This is the escape hatch for one-off
+exceptions (e.g. pinning a VIP member Current past their normal expiry) -
+staff use the standard Membership edit screen for it, exactly as they
+would without this extension installed. It stays disallowed while a
+membership is mid-workflow, because overriding it there would let staff
+hand-set any status and skip the approval process the workflow exists to
+enforce - use the approval dropdown for those instead. Adding the
+`add`-form case (`$form->getVar('_id')` empty) always keeps the fields
+frozen, since `forcePendingOnCreate()` resets a brand-new membership to
+Pending regardless of what the form submits.
+
+Note that even once override is allowed and set, the *next* action taken
+through the approval dropdown (`applyAction()`) still clears it - see
+"What 'Approved' actually sets" in `workflow-states.md`. A workflow-driven
+transition is a fresh, explicit status decision that supersedes a
+standing override, not something the override should block.
 
 ### `hook_civicrm_alterCalculatedMembershipStatus`
 
@@ -155,18 +177,27 @@ permission) is handled by `CRM_Membershipapprovalworkflow_Form_Approve`:
   the dropdown and the help text agree on whether payment is already in -
   see `workflow-states.md`.
 - `buildQuickForm()` adds the `approval_action` select (only if there are
-  allowed actions) and a Back link.
-- `postProcess()` calls `Utils::applyAction($membershipId,
-  $values['approval_action'])`, which validates the action is still legal
-  for the membership's current status, builds the appropriate `status_id`
-  (and, for "Approved", the recalculated dates), and applies it via
-  `Membership.update` API4. Depending on which action it was, it then sends one
-  of two notification emails (each independently switchable from
-  **Administer > CiviMember > Membership Approval Workflow Notifications**)
-  - see `email-notifications.md`:
+  allowed actions), a Back link, and **two** submit buttons: "Apply" and
+  "Apply and Send Notification" (the latter via `addButtons()`'s
+  `subName`, `CRM_Membershipapprovalworkflow_Form_Approve::
+  BUTTON_SUBNAME_SEND_NOTIFICATION`).
+- `postProcess()` reads which button was clicked
+  (`$this->controller->getButtonName()`) to decide `$sendNotification`,
+  then calls `Utils::applyAction($membershipId, $values['approval_action'],
+  $sendNotification)`, which validates the action is still legal for the
+  membership's current status, builds the appropriate `status_id` (and,
+  for "Approved", the recalculated dates), and applies it via
+  `Membership.update` API4. Only when `$sendNotification` is `TRUE` - i.e.
+  "Apply and Send Notification" was clicked - does it then send one of two
+  notification emails, and only if the relevant
+  `membershipapprovalworkflow_notify_*` setting is also still enabled
+  (**Administer > CiviMember > Membership Approval Workflow Settings**) -
+  see `email-notifications.md`:
   - moving into Under Review -> `sendUnderReviewNotification()`;
   - Under Review -> (Approved or Approved/Pending Payment) ->
     `sendUnderReviewApprovedNotification()`.
+  Plain "Apply" always skips the notification block entirely, regardless
+  of the action taken or those settings.
 
 ## The settings screen
 

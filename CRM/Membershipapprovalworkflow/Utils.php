@@ -398,6 +398,37 @@ class CRM_Membershipapprovalworkflow_Utils {
   }
 
   /**
+   * Whether staff can use CiviCRM's native Status Override
+   * (`is_override`/`status_override_end_date`) on this membership through
+   * the standard "Edit Membership" screen - see
+   * membershipapprovalworkflow_civicrm_buildForm().
+   *
+   * Allowed once a membership has moved past this workflow entirely: its
+   * type is out of scope (isMembershipTypeInWorkflow()), or its current
+   * status is not one of protectedStatusNames(). Overriding a membership
+   * still mid-workflow (Pending, Pending Approval/Payment Received, Under
+   * Review, Approved/Pending Payment) would let staff bypass the approval
+   * process itself by hand-setting it to any status, so that stays
+   * disallowed - use the approval dropdown for those instead.
+   *
+   * Even when this returns TRUE, any *subsequent* action taken through the
+   * approval dropdown (applyAction()) still clears the override, same as
+   * for any other status change it makes - a workflow-driven transition is
+   * an explicit new status decision that supersedes a standing override.
+   *
+   * @param int $membershipId
+   * @return bool
+   */
+  public static function canUseStatusOverride($membershipId) {
+    if (!self::isMembershipTypeInWorkflow(self::getMembershipTypeId($membershipId))) {
+      return TRUE;
+    }
+    $statusId = CRM_Core_DAO::getFieldValue('CRM_Member_DAO_Membership', $membershipId, 'status_id');
+    $statusName = self::getStatusNameById($statusId);
+    return !in_array($statusName, self::protectedStatusNames(), TRUE);
+  }
+
+  /**
    * The approval workflow's status sequence, in display order, for the
    * "where does this fit in the process" help text on the approval form
    * (CRM_Membershipapprovalworkflow_Form_Approve). This is the full happy
@@ -595,12 +626,20 @@ class CRM_Membershipapprovalworkflow_Utils {
    * @param int $membershipId
    * @param string $action
    *   One of the ACTION_* constants.
+   * @param bool $sendNotification
+   *   Whether to attempt this action's applicant notification email at all
+   *   - see CRM_Membershipapprovalworkflow_Form_Approve, which offers
+   *   staff a separate "Apply and Send Notification" button precisely so
+   *   this can be opted into per-click rather than happening automatically
+   *   on every "Apply". Still subject to the relevant
+   *   SETTING_NOTIFY_* toggle either way - this is an additional gate, not
+   *   a replacement for it.
    *
    * @return array
    *   The updated membership (API4 Membership.update result values).
    * @throws \CRM_Core_Exception
    */
-  public static function applyAction($membershipId, $action) {
+  public static function applyAction($membershipId, $action, $sendNotification = TRUE) {
     $membership = self::getMembership($membershipId);
     self::assertPrimaryMembership($membership);
     self::assertMembershipTypeInWorkflow($membership);
@@ -665,22 +704,24 @@ class CRM_Membershipapprovalworkflow_Utils {
       return self::updateMembership($params);
     });
 
-    if ($action === self::ACTION_UNDER_REVIEW) {
-      self::sendUnderReviewNotification($result + $membership);
-    }
-    elseif ($currentStatusName === self::STATUS_UNDER_REVIEW
-      && in_array($action, [self::ACTION_APPROVED_PENDING_PAYMENT, self::ACTION_APPROVED], TRUE)
-    ) {
-      // Use $result (the just-saved record), not $membership (fetched
-      // before the update) - ACTION_APPROVED computes new start/end dates
-      // that only $result reflects.
-      self::sendUnderReviewApprovedNotification($result + $membership, self::getStatusNameById($params['status_id']));
-    }
-    elseif ($action === self::ACTION_DENIED) {
-      self::sendDeniedNotification($result + $membership);
-    }
-    elseif ($action === self::ACTION_NOT_FULFILLED) {
-      self::sendNotFulfilledNotification($result + $membership);
+    if ($sendNotification) {
+      if ($action === self::ACTION_UNDER_REVIEW) {
+        self::sendUnderReviewNotification($result + $membership);
+      }
+      elseif ($currentStatusName === self::STATUS_UNDER_REVIEW
+        && in_array($action, [self::ACTION_APPROVED_PENDING_PAYMENT, self::ACTION_APPROVED], TRUE)
+      ) {
+        // Use $result (the just-saved record), not $membership (fetched
+        // before the update) - ACTION_APPROVED computes new start/end
+        // dates that only $result reflects.
+        self::sendUnderReviewApprovedNotification($result + $membership, self::getStatusNameById($params['status_id']));
+      }
+      elseif ($action === self::ACTION_DENIED) {
+        self::sendDeniedNotification($result + $membership);
+      }
+      elseif ($action === self::ACTION_NOT_FULFILLED) {
+        self::sendNotFulfilledNotification($result + $membership);
+      }
     }
 
     return $result;

@@ -121,7 +121,14 @@ function membershipapprovalworkflow_civicrm_pre($op, $objectName, $id, &$params)
  * Implements hook_civicrm_buildForm().
  *
  * Membership status is controlled by the dedicated approval action, not by
- * the standard membership add/edit form.
+ * the standard membership add/edit form - so status_id/is_override/
+ * status_override_end_date are frozen there while the workflow still owns
+ * the membership's status. Once a membership has moved past the workflow
+ * (or its type is out of scope for it entirely - see
+ * CRM_Membershipapprovalworkflow_Utils::isMembershipTypeInWorkflow()),
+ * staff can use CiviCRM's normal Status Override for one-off exceptions,
+ * same as if this extension weren't installed. See
+ * CRM_Membershipapprovalworkflow_Utils::canUseStatusOverride().
  *
  * @link https://docs.civicrm.org/dev/en/latest/hooks/hook_civicrm_buildForm/
  */
@@ -135,9 +142,16 @@ function membershipapprovalworkflow_civicrm_buildForm($formName, &$form): void {
     $form->elementExists('is_override') ? 'is_override' : NULL,
     $form->elementExists('status_override_end_date') ? 'status_override_end_date' : NULL,
   ]);
-  if ($fields) {
-    $form->freeze($fields);
+  if (!$fields) {
+    return;
   }
+
+  $membershipId = $form->getVar('_id');
+  if ($membershipId && CRM_Membershipapprovalworkflow_Utils::canUseStatusOverride($membershipId)) {
+    return;
+  }
+
+  $form->freeze($fields);
 }
 
 /**

@@ -2,8 +2,21 @@
 
 ## What triggers it
 
-`Utils::applyAction()` sends one notification email for each of the
-status-changing actions on the approval screen that has a template:
+The approval screen (`CRM_Membershipapprovalworkflow_Form_Approve`) has
+**two** submit buttons: **Apply** and **Apply and Send Notification**.
+Both apply the chosen status change identically - the only difference is
+that clicking **Apply and Send Notification** passes `$sendNotification =
+TRUE` into `Utils::applyAction($membershipId, $action, $sendNotification)`
+(plain **Apply** passes `FALSE`). When `FALSE`, `applyAction()` skips its
+entire notification block - no email is even attempted, regardless of the
+`membershipapprovalworkflow_notify_*` settings below. Sending a
+notification therefore now requires **both** clicking that button **and**
+the relevant setting being enabled - the button is an additional gate in
+front of the settings, not a replacement for them.
+
+When `$sendNotification` is `TRUE`, `Utils::applyAction()` sends one
+notification email for each of the status-changing actions on the
+approval screen that has a template:
 
 | Action (from -> to) | Template `workflow_name` | Gated by setting |
 |---|---|---|
@@ -30,6 +43,8 @@ Notifications** (`civicrm/admin/membershipapprovalworkflow` -
 
 It does *not* fire for:
 
+- clicking plain **Apply** instead of **Apply and Send Notification** -
+  see above,
 - the automatic Approved/Pending Payment -> Approved transition on
   contribution completion (`markCurrentOnPayment()` does not call either
   notification method),
@@ -157,12 +172,18 @@ failure never rolls back or blocks the approval itself.
 
 ## Turning a notification off
 
-**Administer > CiviMember > Membership Approval Workflow Notifications**
-(`civicrm/admin/membershipapprovalworkflow`) has one checkbox per
-notification. Unchecking it does not touch the message template or the
-underlying status change - it only stops that specific `send*()` call from
-running, checked via `Civi::settings()->get()` before anything else in the
-method happens (no email lookup, no template render). The five settings
+Two independent ways to stop a notification from going out, either one is
+enough:
+
+1. **Click plain "Apply"** on the approval screen instead of "Apply and
+   Send Notification" - see "What triggers it" above. This is the
+   per-click choice; it doesn't touch any setting.
+2. **Administer > CiviMember > Membership Approval Workflow Settings**
+   (`civicrm/admin/membershipapprovalworkflow`) has one checkbox per
+   notification. Unchecking it does not touch the message template or the
+   underlying status change - it only stops that specific `send*()` call from
+   running, checked via `Civi::settings()->get()` before anything else in the
+   method happens (no email lookup, no template render). The five settings
 (`membershipapprovalworkflow_notify_under_review`,
 `membershipapprovalworkflow_notify_approved_pending_payment`,
 `membershipapprovalworkflow_notify_approved`,

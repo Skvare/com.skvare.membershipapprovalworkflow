@@ -13,6 +13,12 @@ use CRM_Membershipapprovalworkflow_ExtensionUtil as E;
  */
 class CRM_Membershipapprovalworkflow_Form_Approve extends CRM_Core_Form {
 
+  /**
+   * addButtons() subName for the second submit button - see
+   * buildQuickForm()/postProcess().
+   */
+  const BUTTON_SUBNAME_SEND_NOTIFICATION = 'send_notification';
+
   private $membershipId;
   private $contactId;
   private $currentStatusName;
@@ -55,6 +61,11 @@ class CRM_Membershipapprovalworkflow_Form_Approve extends CRM_Core_Form {
           'name' => E::ts('Apply'),
           'isDefault' => TRUE,
         ],
+        [
+          'type' => 'submit',
+          'name' => E::ts('Apply and Send Notification'),
+          'subName' => self::BUTTON_SUBNAME_SEND_NOTIFICATION,
+        ],
       ]);
     }
 
@@ -70,7 +81,9 @@ class CRM_Membershipapprovalworkflow_Form_Approve extends CRM_Core_Form {
   public function postProcess() {
     $values = $this->exportValues();
     if (!empty($values['approval_action'])) {
-      CRM_Membershipapprovalworkflow_Utils::applyAction($this->membershipId, $values['approval_action']);
+      $sendNotification = $this->controller->getButtonName()
+        === $this->getButtonName('submit', self::BUTTON_SUBNAME_SEND_NOTIFICATION);
+      CRM_Membershipapprovalworkflow_Utils::applyAction($this->membershipId, $values['approval_action'], $sendNotification);
       CRM_Core_Session::setStatus(E::ts('Membership status updated.'), E::ts('Saved'), 'success');
     }
   }

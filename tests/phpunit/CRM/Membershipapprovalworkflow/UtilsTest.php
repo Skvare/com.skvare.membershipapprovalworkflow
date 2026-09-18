@@ -1,5 +1,8 @@
 <?php
 
+use Civi\Api4\Contact;
+use Civi\Api4\Membership;
+use Civi\Api4\MembershipType;
 use Civi\Api4\MessageTemplate;
 use Civi\Test\CiviEnvBuilder;
 use Civi\Test\HeadlessInterface;
@@ -187,6 +190,86 @@ class CRM_Membershipapprovalworkflow_UtilsTest extends \PHPUnit\Framework\TestCa
 
     $this->expectException(CRM_Core_Exception::class);
     CRM_Membershipapprovalworkflow_Utils::assertMembershipTypeInWorkflow(['membership_type_id' => 2]);
+  }
+
+  public function testCanUseStatusOverrideDependsOnProtectedStatus(): void {
+    Civi::settings()->revert(CRM_Membershipapprovalworkflow_Utils::SETTING_MEMBERSHIP_TYPES);
+    $membershipId = $this->createTestMembership();
+
+    $this->setMembershipStatus($membershipId, CRM_Membershipapprovalworkflow_Utils::STATUS_UNDER_REVIEW);
+    $this->assertFalse(CRM_Membershipapprovalworkflow_Utils::canUseStatusOverride($membershipId));
+
+    $this->setMembershipStatus($membershipId, CRM_Membershipapprovalworkflow_Utils::STATUS_CURRENT);
+    $this->assertTrue(CRM_Membershipapprovalworkflow_Utils::canUseStatusOverride($membershipId));
+  }
+
+  public function testCanUseStatusOverrideAllowedWhenTypeOutOfScope(): void {
+    $settingName = CRM_Membershipapprovalworkflow_Utils::SETTING_MEMBERSHIP_TYPES;
+    $membershipId = $this->createTestMembership();
+    $this->setMembershipStatus($membershipId, CRM_Membershipapprovalworkflow_Utils::STATUS_UNDER_REVIEW);
+
+    // Type is in scope by default (setting empty) - protected status blocks override.
+    Civi::settings()->revert($settingName);
+    $this->assertFalse(CRM_Membershipapprovalworkflow_Utils::canUseStatusOverride($membershipId));
+
+    // Scope the workflow to a type that isn't this membership's - it falls out of scope,
+    // so override is allowed even in a protected status.
+    Civi::settings()->set($settingName, [0]);
+    $this->assertTrue(CRM_Membershipapprovalworkflow_Utils::canUseStatusOverride($membershipId));
+
+    Civi::settings()->revert($settingName);
+  }
+
+  /**
+   * Creates a membership (with its own organization, membership type, and
+   * individual contact) for canUseStatusOverride() tests to exercise
+   * against a real row.
+   *
+   * @return int
+   */
+  private function createTestMembership(): int {
+    $orgId = Contact::create(FALSE)
+      ->addValue('contact_type', 'Organization')
+      ->addValue('organization_name', 'Test Org ' . uniqid())
+      ->execute()
+      ->first()['id'];
+
+    $membershipTypeId = MembershipType::create(FALSE)
+      ->addValue('name', 'Test Type ' . uniqid())
+      ->addValue('member_of_contact_id', $orgId)
+      ->addValue('financial_type_id:name', 'Member Dues')
+      ->addValue('period_type', 'rolling')
+      ->addValue('duration_unit', 'year')
+      ->execute()
+      ->first()['id'];
+
+    $contactId = Contact::create(FALSE)
+      ->addValue('contact_type', 'Individual')
+      ->addValue('first_name', 'Test')
+      ->addValue('last_name', 'Member ' . uniqid())
+      ->execute()
+      ->first()['id'];
+
+    return Membership::create(FALSE)
+      ->addValue('contact_id', $contactId)
+      ->addValue('membership_type_id', $membershipTypeId)
+      ->execute()
+      ->first()['id'];
+  }
+
+  /**
+   * Sets a membership's status_id directly via a raw DAO write - bypassing
+   * this extension's own hooks, which is exactly what's needed here: these
+   * tests exercise canUseStatusOverride()'s read-only logic against an
+   * arbitrary status, not the write-guards that are tested elsewhere.
+   */
+  private function setMembershipStatus(int $membershipId, string $statusName): void {
+    CRM_Core_DAO::setFieldValue(
+      'CRM_Member_DAO_Membership',
+      $membershipId,
+      'status_id',
+      CRM_Membershipapprovalworkflow_Utils::getStatusIdByName($statusName)
+    );
   }
 
 }
