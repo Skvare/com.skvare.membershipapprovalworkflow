@@ -22,6 +22,7 @@ class CRM_Membershipapprovalworkflow_Form_Approve extends CRM_Core_Form {
     $this->membershipId = CRM_Utils_Request::retrieve('id', 'Positive', $this, TRUE);
     $membership = CRM_Membershipapprovalworkflow_Utils::getMembership($this->membershipId);
     CRM_Membershipapprovalworkflow_Utils::assertPrimaryMembership($membership);
+    CRM_Membershipapprovalworkflow_Utils::assertMembershipTypeInWorkflow($membership);
     // Do not trust a contact ID from the URL. It must always match the
     // membership being acted on.
     $this->contactId = $membership['contact_id'];

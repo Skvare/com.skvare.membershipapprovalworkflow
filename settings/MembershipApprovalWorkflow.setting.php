@@ -13,6 +13,28 @@ return [
     'is_domain' => 1,
     'is_contact' => 0,
   ],
+  'membershipapprovalworkflow_membership_types' => [
+    'name' => 'membershipapprovalworkflow_membership_types',
+    'group' => 'membershipapprovalworkflow',
+    'type' => 'Array',
+    'html_type' => 'select',
+    'html_attributes' => [
+      'class' => 'crm-select2',
+      'multiple' => TRUE,
+      'placeholder' => E::ts('All membership types'),
+    ],
+    'pseudoconstant' => [
+      'table' => 'civicrm_membership_type',
+      'keyColumn' => 'id',
+      'labelColumn' => 'name',
+    ],
+    'default' => [],
+    'title' => E::ts('Membership types using this workflow'),
+    'description' => E::ts('Memberships of these types go through the approval workflow (forced to Pending on signup, routed through the Under Review / Approved / etc. statuses, and locked against ordinary status edits). Every other membership type is left to CiviCRM\'s normal behavior, as if this extension were not installed. Leave blank to apply the workflow to all membership types.'),
+    'is_domain' => 1,
+    'is_contact' => 0,
+    'settings_pages' => ['membershipapprovalworkflow' => ['weight' => 5]],
+  ],
   'membershipapprovalworkflow_notify_under_review' => [
     'name' => 'membershipapprovalworkflow_notify_under_review',
     'group' => 'membershipapprovalworkflow',

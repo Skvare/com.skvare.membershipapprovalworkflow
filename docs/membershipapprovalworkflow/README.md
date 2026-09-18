@@ -41,7 +41,8 @@ This directory documents how the extension works internally - the companion
 | Hook implementations | `membershipapprovalworkflow.php` |
 | Approval action screen | `CRM/Membershipapprovalworkflow/Form/Approve.php` + `templates/CRM/Membershipapprovalworkflow/Form/Approve.tpl` |
 | Approval screen route | `xml/Menu/membershipapprovalworkflow.xml` (`civicrm/membership/approve`) |
-| Notification settings screen | `CRM/Membershipapprovalworkflow/Form/Settings.php` + `templates/CRM/Membershipapprovalworkflow/Form/Settings.tpl` (`civicrm/admin/membershipapprovalworkflow`) |
+| Settings screen | `CRM/Membershipapprovalworkflow/Form/Settings.php` + `templates/CRM/Membershipapprovalworkflow/Form/Settings.tpl` (`civicrm/admin/membershipapprovalworkflow`) |
+| Membership types this workflow applies to | `settings/MembershipApprovalWorkflow.setting.php` (`membershipapprovalworkflow_membership_types`) |
 | Notification on/off settings | `settings/MembershipApprovalWorkflow.setting.php` (`membershipapprovalworkflow_notify_*`) |
 | Custom membership statuses | `managed/MembershipStatus.mgd.php` (Under Review, Approved/Pending Payment, Pending Approval/Payment Received) |
 | "Under Review" notification email | `managed/MessageTemplate_UnderReview.mgd.php` + `managed/under_review_*.tpl` |

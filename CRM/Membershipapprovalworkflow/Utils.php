@@ -29,7 +29,6 @@ class CRM_Membershipapprovalworkflow_Utils {
   const STATUS_SUSPENDED = 'Suspended';
   const STATUS_REMOVED = 'Removed';
   const STATUS_EXPIRED = 'Expired';
-  const STATUS_CANCELLED = 'Cancelled';
   const STATUS_CANCELLED_BY_MEMBER = 'Cancelled by Member';
 
   const SETTING_NEW_STATUS_WAS_ACTIVE = 'membershipapprovalworkflow_new_status_was_active';
@@ -47,6 +46,13 @@ class CRM_Membershipapprovalworkflow_Utils {
   const SETTING_NOTIFY_NOT_FULFILLED = 'membershipapprovalworkflow_notify_not_fulfilled';
 
   /**
+   * Setting (settings/MembershipApprovalWorkflow.setting.php) listing which
+   * membership types this workflow applies to. Empty/unset means "all
+   * types" - see isMembershipTypeInWorkflow().
+   */
+  const SETTING_MEMBERSHIP_TYPES = 'membershipapprovalworkflow_membership_types';
+
+  /**
    * Action keys used by the approval dropdown, in display order.
    */
   const ACTION_UNDER_REVIEW = 'under_review';
@@ -57,10 +63,17 @@ class CRM_Membershipapprovalworkflow_Utils {
   const ACTION_SUSPENDED = 'suspended';
   const ACTION_REMOVED = 'removed';
   const ACTION_EXPIRED = 'expired';
-  const ACTION_CANCELLED = 'cancelled';
   const ACTION_CANCELLED_BY_MEMBER = 'cancelled_by_member';
 
   private static $statusIdCache = [];
+
+  /**
+   * Per-request cache of each membership's membership_type_id, keyed by
+   * membership ID - see getMembershipTypeId().
+   *
+   * @var array<int,int>
+   */
+  private static $membershipTypeIdCache = [];
 
   /**
    * Depth counter for membership updates initiated by this workflow.
@@ -320,6 +333,58 @@ class CRM_Membershipapprovalworkflow_Utils {
   }
 
   /**
+   * Whether this workflow applies to the given membership type, per the
+   * SETTING_MEMBERSHIP_TYPES setting (CRM_Membershipapprovalworkflow_Form_
+   * Settings). An empty/unset setting means the workflow applies to every
+   * membership type - this is also the pre-upgrade behavior, before this
+   * setting existed.
+   *
+   * @param int|string|NULL $membershipTypeId
+   * @return bool
+   */
+  public static function isMembershipTypeInWorkflow($membershipTypeId) {
+    $configuredTypeIds = Civi::settings()->get(self::SETTING_MEMBERSHIP_TYPES);
+    if (empty($configuredTypeIds)) {
+      return TRUE;
+    }
+    if (!$membershipTypeId) {
+      return FALSE;
+    }
+    return in_array((int) $membershipTypeId, array_map('intval', (array) $configuredTypeIds), TRUE);
+  }
+
+  /**
+   * Reject direct actions against a membership whose type this workflow
+   * does not apply to - see isMembershipTypeInWorkflow().
+   *
+   * @throws \CRM_Core_Exception
+   */
+  public static function assertMembershipTypeInWorkflow(array $membership) {
+    if (!self::isMembershipTypeInWorkflow($membership['membership_type_id'] ?? NULL)) {
+      throw new CRM_Core_Exception(E::ts('This membership type does not use the approval workflow.'));
+    }
+  }
+
+  /**
+   * The membership's membership_type_id, cached per request - see
+   * $membershipTypeIdCache. Used by hooks that only have a membership ID
+   * (not the full record) to check isMembershipTypeInWorkflow() against.
+   *
+   * @param int $membershipId
+   * @return int
+   */
+  private static function getMembershipTypeId($membershipId) {
+    if (!array_key_exists($membershipId, self::$membershipTypeIdCache)) {
+      self::$membershipTypeIdCache[$membershipId] = (int) CRM_Core_DAO::getFieldValue(
+        'CRM_Member_DAO_Membership',
+        $membershipId,
+        'membership_type_id'
+      );
+    }
+    return self::$membershipTypeIdCache[$membershipId];
+  }
+
+  /**
    * Status names this extension owns and no other process should silently
    * move a membership out of.
    */
@@ -466,9 +531,12 @@ class CRM_Membershipapprovalworkflow_Utils {
    * whether payment happens to already be in.
    *
    * Beyond the original Pending -> ... -> Current pipeline, a membership
-   * can also move on from "Approved/Pending Payment" (-> Not Fulfilled),
-   * "Current" (-> Suspended / Removed / Expired), and "Expired" (->
-   * Cancelled / Cancelled by Member).
+   * can also move on from "Pending"/"Pending Approval/Payment Received"
+   * straight to "Current" (skipping review), from "Under Review" to "Not
+   * Fulfilled" (in addition to the outcomes above), from "Approved/Pending
+   * Payment" back to "Under Review", from "Current" to "Cancelled by
+   * Member" or back to "Under Review" (in addition to Suspended / Removed
+   * / Expired), and from "Expired" back to "Current".
    *
    * @param string $currentStatusName
    * @param bool $paymentReceived
@@ -481,19 +549,24 @@ class CRM_Membershipapprovalworkflow_Utils {
     switch ($currentStatusName) {
       case self::STATUS_PENDING:
       case self::STATUS_PENDING_APPROVAL_PAYMENT_RECEIVED:
-        return [self::ACTION_UNDER_REVIEW => E::ts('Under Review')];
+        return [
+          self::ACTION_UNDER_REVIEW => E::ts('Under Review'),
+          self::ACTION_APPROVED => E::ts('Current'),
+        ];
 
       case self::STATUS_UNDER_REVIEW:
         $actions = $paymentReceived
           ? [self::ACTION_APPROVED => E::ts('Approved')]
           : [self::ACTION_APPROVED_PENDING_PAYMENT => E::ts('Approved/Pending Payment')];
         $actions[self::ACTION_DENIED] = E::ts('Denied');
+        $actions[self::ACTION_NOT_FULFILLED] = E::ts('Not Fulfilled');
         return $actions;
 
       case self::STATUS_APPROVED_PENDING_PAYMENT:
         return [
           self::ACTION_APPROVED => E::ts('Approved'),
           self::ACTION_NOT_FULFILLED => E::ts('Not Fulfilled'),
+          self::ACTION_UNDER_REVIEW => E::ts('Under Review'),
         ];
 
       case self::STATUS_CURRENT:
@@ -501,17 +574,16 @@ class CRM_Membershipapprovalworkflow_Utils {
           self::ACTION_SUSPENDED => E::ts('Suspended'),
           self::ACTION_REMOVED => E::ts('Removed'),
           self::ACTION_EXPIRED => E::ts('Expired'),
+          self::ACTION_CANCELLED_BY_MEMBER => E::ts('Cancelled by Member'),
+          self::ACTION_UNDER_REVIEW => E::ts('Under Review'),
         ];
 
       case self::STATUS_EXPIRED:
-        return [
-          self::ACTION_CANCELLED => E::ts('Cancelled'),
-          self::ACTION_CANCELLED_BY_MEMBER => E::ts('Cancelled by Member'),
-        ];
+        return [self::ACTION_APPROVED => E::ts('Current')];
 
       default:
-        // Grace, Suspended, Removed, Denied, Not Fulfilled, Cancelled,
-        // Cancelled by Member, Deceased, etc. - workflow is done.
+        // Grace, Suspended, Removed, Denied, Not Fulfilled, Cancelled by
+        // Member, Deceased, etc. - workflow is done.
         return [];
     }
   }
@@ -531,6 +603,7 @@ class CRM_Membershipapprovalworkflow_Utils {
   public static function applyAction($membershipId, $action) {
     $membership = self::getMembership($membershipId);
     self::assertPrimaryMembership($membership);
+    self::assertMembershipTypeInWorkflow($membership);
     $currentStatusName = self::getStatusNameById($membership['status_id']);
     $allowedActions = self::getAllowedActions($currentStatusName, self::hasReceivedPayment($membershipId));
     if (!array_key_exists($action, $allowedActions)) {
@@ -578,10 +651,6 @@ class CRM_Membershipapprovalworkflow_Utils {
 
       case self::ACTION_EXPIRED:
         $params['status_id'] = self::getStatusIdByName(self::STATUS_EXPIRED);
-        break;
-
-      case self::ACTION_CANCELLED:
-        $params['status_id'] = self::getStatusIdByName(self::STATUS_CANCELLED);
         break;
 
       case self::ACTION_CANCELLED_BY_MEMBER:
@@ -940,12 +1009,18 @@ class CRM_Membershipapprovalworkflow_Utils {
    * this type, this "create" is really a renewal landing in a new row
    * (e.g. a type change) rather than a fresh signup - leave it to core's
    * normal renewal handling instead of resetting it to Pending.
+   *
+   * Membership types left out of SETTING_MEMBERSHIP_TYPES skip this
+   * workflow entirely - see isMembershipTypeInWorkflow().
    */
   public static function forcePendingOnCreate(array &$params) {
     // Inherited memberships are managed by core's own
     // createRelatedMemberships(), which syncs status from the owner
     // membership and already sets skipStatusCal - leave them alone.
     if (!empty($params['owner_membership_id'])) {
+      return;
+    }
+    if (!self::isMembershipTypeInWorkflow($params['membership_type_id'] ?? NULL)) {
       return;
     }
     if (self::isRenewalOfActiveMembership($params)) {
@@ -1000,9 +1075,15 @@ class CRM_Membershipapprovalworkflow_Utils {
    * "Already in" is judged from getObservedStatusId(), not a fresh
    * database read, so a renewal's own intermediate Pending save (see that
    * method's docblock) can't be mistaken for a workflow-owned Pending.
+   *
+   * Membership types left out of SETTING_MEMBERSHIP_TYPES skip this
+   * workflow entirely - see isMembershipTypeInWorkflow().
    */
   public static function preserveWorkflowStatusOnEdit($membershipId, array &$params) {
     if (!$membershipId || self::$workflowUpdateDepth > 0) {
+      return;
+    }
+    if (!self::isMembershipTypeInWorkflow(self::getMembershipTypeId($membershipId))) {
       return;
     }
 
@@ -1032,6 +1113,9 @@ class CRM_Membershipapprovalworkflow_Utils {
    *    directly.
    *    A pay-later membership whose contribution is never completed is
    *    unaffected and stays Pending, per existing behavior.
+   *
+   * A linked membership whose type is left out of SETTING_MEMBERSHIP_TYPES
+   * is skipped - see isMembershipTypeInWorkflow().
    */
   public static function handleContributionCompleted($contributionId) {
     $contribution = Contribution::get(FALSE)
@@ -1046,6 +1130,9 @@ class CRM_Membershipapprovalworkflow_Utils {
 
     $membershipIds = self::getMembershipPaymentLinkedIds('contribution_id', $contributionId, 'membership_id');
     foreach ($membershipIds as $membershipId) {
+      if (!self::isMembershipTypeInWorkflow(self::getMembershipTypeId($membershipId))) {
+        continue;
+      }
       $statusId = CRM_Core_DAO::getFieldValue('CRM_Member_DAO_Membership', $membershipId, 'status_id');
       $statusName = self::getStatusNameById($statusId);
       if ($statusName === self::STATUS_APPROVED_PENDING_PAYMENT) {
@@ -1082,10 +1169,17 @@ class CRM_Membershipapprovalworkflow_Utils {
    *    so seeing it here means core's renewal bookkeeping produced a
    *    bogus target - restore the membership's observed status instead of
    *    letting that persist.
+   *
+   * Membership types left out of SETTING_MEMBERSHIP_TYPES skip both jobs -
+   * see isMembershipTypeInWorkflow().
    */
   public static function preserveProtectedStatus(array &$membershipStatus, array $membership) {
     $membershipId = $membership['id'] ?? NULL;
     if (!$membershipId) {
+      return;
+    }
+    $membershipTypeId = $membership['membership_type_id'] ?? self::getMembershipTypeId($membershipId);
+    if (!self::isMembershipTypeInWorkflow($membershipTypeId)) {
       return;
     }
     // $membership['status_id'] is the row's status as of just before this

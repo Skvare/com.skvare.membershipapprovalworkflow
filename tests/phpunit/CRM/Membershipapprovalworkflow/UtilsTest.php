@@ -80,11 +80,14 @@ class CRM_Membershipapprovalworkflow_UtilsTest extends \PHPUnit\Framework\TestCa
     $this->assertStringContainsString('{crmURL', $updatedTemplate['msg_text']);
   }
 
-  public function testPendingMembershipOnlyAllowsReview(): void {
+  public function testPendingMembershipAllowsReviewOrCurrent(): void {
     $actions = CRM_Membershipapprovalworkflow_Utils::getAllowedActions(
       CRM_Membershipapprovalworkflow_Utils::STATUS_PENDING
     );
-    $this->assertSame([CRM_Membershipapprovalworkflow_Utils::ACTION_UNDER_REVIEW], array_keys($actions));
+    $this->assertSame(
+      [CRM_Membershipapprovalworkflow_Utils::ACTION_UNDER_REVIEW, CRM_Membershipapprovalworkflow_Utils::ACTION_APPROVED],
+      array_keys($actions)
+    );
   }
 
   public function testUnderReviewActionDependsOnPayment(): void {
@@ -93,7 +96,11 @@ class CRM_Membershipapprovalworkflow_UtilsTest extends \PHPUnit\Framework\TestCa
       FALSE
     );
     $this->assertSame(
-      [CRM_Membershipapprovalworkflow_Utils::ACTION_APPROVED_PENDING_PAYMENT, CRM_Membershipapprovalworkflow_Utils::ACTION_DENIED],
+      [
+        CRM_Membershipapprovalworkflow_Utils::ACTION_APPROVED_PENDING_PAYMENT,
+        CRM_Membershipapprovalworkflow_Utils::ACTION_DENIED,
+        CRM_Membershipapprovalworkflow_Utils::ACTION_NOT_FULFILLED,
+      ],
       array_keys($unpaidActions)
     );
 
@@ -102,22 +109,30 @@ class CRM_Membershipapprovalworkflow_UtilsTest extends \PHPUnit\Framework\TestCa
       TRUE
     );
     $this->assertSame(
-      [CRM_Membershipapprovalworkflow_Utils::ACTION_APPROVED, CRM_Membershipapprovalworkflow_Utils::ACTION_DENIED],
+      [
+        CRM_Membershipapprovalworkflow_Utils::ACTION_APPROVED,
+        CRM_Membershipapprovalworkflow_Utils::ACTION_DENIED,
+        CRM_Membershipapprovalworkflow_Utils::ACTION_NOT_FULFILLED,
+      ],
       array_keys($paidActions)
     );
   }
 
-  public function testApprovedPendingPaymentAllowsApprovedOrNotFulfilled(): void {
+  public function testApprovedPendingPaymentAllowsApprovedNotFulfilledOrUnderReview(): void {
     $actions = CRM_Membershipapprovalworkflow_Utils::getAllowedActions(
       CRM_Membershipapprovalworkflow_Utils::STATUS_APPROVED_PENDING_PAYMENT
     );
     $this->assertSame(
-      [CRM_Membershipapprovalworkflow_Utils::ACTION_APPROVED, CRM_Membershipapprovalworkflow_Utils::ACTION_NOT_FULFILLED],
+      [
+        CRM_Membershipapprovalworkflow_Utils::ACTION_APPROVED,
+        CRM_Membershipapprovalworkflow_Utils::ACTION_NOT_FULFILLED,
+        CRM_Membershipapprovalworkflow_Utils::ACTION_UNDER_REVIEW,
+      ],
       array_keys($actions)
     );
   }
 
-  public function testCurrentMembershipAllowsSuspendedRemovedOrExpired(): void {
+  public function testCurrentMembershipAllowsSuspendedRemovedExpiredCancelledByMemberOrUnderReview(): void {
     $actions = CRM_Membershipapprovalworkflow_Utils::getAllowedActions(
       CRM_Membershipapprovalworkflow_Utils::STATUS_CURRENT
     );
@@ -126,22 +141,52 @@ class CRM_Membershipapprovalworkflow_UtilsTest extends \PHPUnit\Framework\TestCa
         CRM_Membershipapprovalworkflow_Utils::ACTION_SUSPENDED,
         CRM_Membershipapprovalworkflow_Utils::ACTION_REMOVED,
         CRM_Membershipapprovalworkflow_Utils::ACTION_EXPIRED,
+        CRM_Membershipapprovalworkflow_Utils::ACTION_CANCELLED_BY_MEMBER,
+        CRM_Membershipapprovalworkflow_Utils::ACTION_UNDER_REVIEW,
       ],
       array_keys($actions)
     );
   }
 
-  public function testExpiredMembershipAllowsCancelledOrCancelledByMember(): void {
+  public function testExpiredMembershipAllowsCurrent(): void {
     $actions = CRM_Membershipapprovalworkflow_Utils::getAllowedActions(
       CRM_Membershipapprovalworkflow_Utils::STATUS_EXPIRED
     );
     $this->assertSame(
-      [
-        CRM_Membershipapprovalworkflow_Utils::ACTION_CANCELLED,
-        CRM_Membershipapprovalworkflow_Utils::ACTION_CANCELLED_BY_MEMBER,
-      ],
+      [CRM_Membershipapprovalworkflow_Utils::ACTION_APPROVED],
       array_keys($actions)
     );
+  }
+
+  public function testMembershipTypeInWorkflowDefaultsToEveryType(): void {
+    $settingName = CRM_Membershipapprovalworkflow_Utils::SETTING_MEMBERSHIP_TYPES;
+    Civi::settings()->revert($settingName);
+
+    $this->assertTrue(CRM_Membershipapprovalworkflow_Utils::isMembershipTypeInWorkflow(1));
+    $this->assertTrue(CRM_Membershipapprovalworkflow_Utils::isMembershipTypeInWorkflow(999));
+  }
+
+  public function testMembershipTypeInWorkflowRespectsConfiguredList(): void {
+    $settingName = CRM_Membershipapprovalworkflow_Utils::SETTING_MEMBERSHIP_TYPES;
+    Civi::settings()->set($settingName, [1, 2]);
+
+    $this->assertTrue(CRM_Membershipapprovalworkflow_Utils::isMembershipTypeInWorkflow(1));
+    $this->assertTrue(CRM_Membershipapprovalworkflow_Utils::isMembershipTypeInWorkflow('2'));
+    $this->assertFalse(CRM_Membershipapprovalworkflow_Utils::isMembershipTypeInWorkflow(3));
+    $this->assertFalse(CRM_Membershipapprovalworkflow_Utils::isMembershipTypeInWorkflow(NULL));
+
+    Civi::settings()->revert($settingName);
+  }
+
+  public function testAssertMembershipTypeInWorkflowRejectsOutOfScopeType(): void {
+    $settingName = CRM_Membershipapprovalworkflow_Utils::SETTING_MEMBERSHIP_TYPES;
+    Civi::settings()->set($settingName, [1]);
+
+    CRM_Membershipapprovalworkflow_Utils::assertMembershipTypeInWorkflow(['membership_type_id' => 1]);
+    $this->addToAssertionCount(1);
+
+    $this->expectException(CRM_Core_Exception::class);
+    CRM_Membershipapprovalworkflow_Utils::assertMembershipTypeInWorkflow(['membership_type_id' => 2]);
   }
 
 }

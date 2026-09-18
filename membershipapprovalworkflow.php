@@ -63,7 +63,9 @@ function membershipapprovalworkflow_civicrm_disable(): void {
  * edit form (requirement 3). Only offered on the primary membership - an
  * inherited membership (owner_membership_id set) tracks its owner's
  * status automatically via core's own createRelatedMemberships(), so
- * approving it directly would be meaningless.
+ * approving it directly would be meaningless. Also withheld for membership
+ * types this workflow doesn't apply to - see
+ * CRM_Membershipapprovalworkflow_Utils::isMembershipTypeInWorkflow().
  *
  * @link https://docs.civicrm.org/dev/en/latest/hooks/hook_civicrm_links/
  */
@@ -72,6 +74,11 @@ function membershipapprovalworkflow_civicrm_links($op, $objectName, $objectId, &
   if (in_array($op, $allowRegions) && $objectName === 'Membership') {
     $ownerMembershipId = CRM_Core_DAO::getFieldValue('CRM_Member_DAO_Membership', $objectId, 'owner_membership_id');
     if ($ownerMembershipId) {
+      return;
+    }
+
+    $membershipTypeId = CRM_Core_DAO::getFieldValue('CRM_Member_DAO_Membership', $objectId, 'membership_type_id');
+    if (!CRM_Membershipapprovalworkflow_Utils::isMembershipTypeInWorkflow($membershipTypeId)) {
       return;
     }
 
@@ -187,15 +194,16 @@ function membershipapprovalworkflow_civicrm_enable(): void {
 /**
  * Implements hook_civicrm_navigationMenu().
  *
- * Adds the "Membership Approval Workflow Notifications" settings screen
- * under Administer > CiviMember, so an administrator can toggle each
- * workflow email on or off - see CRM_Membershipapprovalworkflow_Form_Settings.
+ * Adds the "Membership Approval Workflow Settings" screen under
+ * Administer > CiviMember, so an administrator can choose which membership
+ * types use this workflow and toggle each workflow email on or off - see
+ * CRM_Membershipapprovalworkflow_Form_Settings.
  *
  * @link https://docs.civicrm.org/dev/en/latest/hooks/hook_civicrm_navigationMenu
  */
 function membershipapprovalworkflow_civicrm_navigationMenu(&$menu) {
   _membershipapprovalworkflow_civix_insert_navigation_menu($menu, 'Administer/CiviMember', [
-    'label' => E::ts('Membership Approval Workflow Notifications'),
+    'label' => E::ts('Membership Approval Workflow Settings'),
     'name' => 'membershipapprovalworkflow_settings',
     'url' => 'civicrm/admin/membershipapprovalworkflow',
     'permission' => 'administer CiviCRM',

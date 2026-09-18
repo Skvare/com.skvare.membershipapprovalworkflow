@@ -10,12 +10,11 @@
 | **Approved/Pending Payment** | Added by this extension (`managed/MembershipStatus.mgd.php`) | Yes | Staff have approved the application; waiting on payment. |
 | **Denied** | Added by this extension (`managed/MembershipStatus.mgd.php`) | Yes | Staff rejected the application while it was Under Review. Terminal - no further approval action is offered. |
 | **Not Fulfilled** | Added by this extension (`managed/MembershipStatus.mgd.php`) | Yes | An Approved/Pending Payment membership whose payment never came through. Terminal - no further approval action is offered. |
-| **Current** | Core (default CiviCRM status) | No | Active membership. Reached via the approval dropdown ("Approved") or automatically when a linked contribution completes. |
+| **Current** | Core (default CiviCRM status) | No | Active membership. Reached via the approval dropdown ("Approved"/"Current") or automatically when a linked contribution completes. |
 | **Suspended** | Added by this extension (`managed/MembershipStatus.mgd.php`) | Yes | A Current membership manually suspended by staff. Terminal - no further approval action is offered. |
 | **Removed** | Added by this extension (`managed/MembershipStatus.mgd.php`) | Yes | A Current membership manually removed by staff. Terminal - no further approval action is offered. |
-| **Expired** | Core (default CiviCRM status) | No | A Current membership past its `end_date` (core's date-based calculator), or manually set from Current via the approval dropdown. |
-| **Cancelled** | Core (default CiviCRM status) | Yes | An Expired membership cancelled by staff. |
-| **Cancelled by Member** | Added by this extension (`managed/MembershipStatus.mgd.php`) | Yes | An Expired membership the member themselves chose not to renew. |
+| **Expired** | Core (default CiviCRM status) | No | A Current membership past its `end_date` (core's date-based calculator), or manually set from Current via the approval dropdown. Can be reactivated straight back to Current. |
+| **Cancelled by Member** | Added by this extension (`managed/MembershipStatus.mgd.php`) | Yes | A Current membership the member themselves chose to cancel. Terminal - no further approval action is offered. |
 
 Every custom status has `start_event = NULL` and `end_event = NULL`, same
 as core's own `is_admin` statuses (Cancelled, Deceased). This is what keeps
@@ -42,43 +41,47 @@ dropdown offers, given a membership's current status:
 ```
 Pending                              ─┐
                                        ├──►  Under Review ──┬──►  Approved/Pending Payment ──┬──►  Approved (Current)
-Pending Approval/Payment Received    ─┘                    ├──►  Approved (Current)          └──►  Not Fulfilled
-                                                             └──►  Denied
+Pending Approval/Payment Received    ─┤                    ├──►  Approved (Current)          ├──►  Not Fulfilled
+                                       │                    ├──►  Denied                      └──►  Under Review
+                                       └──►  Current        └──►  Not Fulfilled
 
-Approved (Current) ──┬──►  Suspended
-                      ├──►  Removed
-                      └──►  Expired ──┬──►  Cancelled
-                                      └──►  Cancelled by Member
+Current ──┬──►  Suspended
+          ├──►  Removed
+          ├──►  Cancelled by Member
+          ├──►  Under Review
+          └──►  Expired ──►  Current
 ```
 
-- **Pending -> Under Review**, or **Pending Approval/Payment Received ->
-  Under Review.** This is the *only* action offered from either - a
-  membership cannot skip directly from either to Approved or
-  Approved/Pending Payment.
-- **Under Review -> Denied, plus exactly one of Approved/Pending Payment or
-  Approved - never both.** `getAllowedActions($currentStatusName,
-  $paymentReceived)` decides which of the latter two via
-  `hasReceivedPayment($membershipId)`: if the most recently received
-  contribution linked to the membership (via `MembershipPayment`) is
-  `Completed`, only **Approved** is offered alongside **Denied** (no reason
-  to route through a "pending payment" holding status for money that's
-  already in); otherwise only **Approved/Pending Payment** is offered
-  alongside **Denied** (staff can't activate a membership nothing has been
-  paid for yet - even a comped/$0 membership needs a completed $0
-  contribution to reach Approved directly). **Denied** is terminal - no
+- **Pending -> Under Review or Current**, or **Pending Approval/Payment
+  Received -> Under Review or Current.** Staff can either route the
+  application through review as usual, or skip straight to activating it.
+- **Under Review -> Denied, Not Fulfilled, plus exactly one of
+  Approved/Pending Payment or Approved - never both.**
+  `getAllowedActions($currentStatusName, $paymentReceived)` decides which
+  of the latter two via `hasReceivedPayment($membershipId)`: if the most
+  recently received contribution linked to the membership (via
+  `MembershipPayment`) is `Completed`, only **Approved** is offered (no
+  reason to route through a "pending payment" holding status for money
+  that's already in); otherwise only **Approved/Pending Payment** is
+  offered (staff can't activate a membership nothing has been paid for yet
+  - even a comped/$0 membership needs a completed $0 contribution to reach
+  Approved directly). **Denied** and **Not Fulfilled** are terminal - no
   further approval action is offered afterwards.
-- **Approved/Pending Payment -> Approved or Not Fulfilled.** Approved also
-  happens automatically - see below. **Not Fulfilled** is terminal.
-- **Current -> Suspended, Removed, or Expired.** All three are manual
-  actions on the approval dropdown; **Expired** can also still happen
-  automatically via CiviCRM's date-based status calculator once
-  `end_date` passes (core status, not owned by this extension - see
-  below). **Suspended** and **Removed** are terminal.
-- **Expired -> Cancelled or Cancelled by Member.** Both terminal.
-- **Grace, Denied, Not Fulfilled, Suspended, Removed, Cancelled, Cancelled
-  by Member, Deceased, anything else -> no action offered.** The
-  "Membership Approval" link doesn't even appear for these (see
-  `architecture.md` - `hook_civicrm_links`).
+- **Approved/Pending Payment -> Approved, Not Fulfilled, or back to Under
+  Review.** Approved also happens automatically - see below. **Not
+  Fulfilled** is terminal.
+- **Current -> Suspended, Removed, Expired, Cancelled by Member, or back to
+  Under Review.** All are manual actions on the approval dropdown; Expired
+  can also still happen automatically via CiviCRM's date-based status
+  calculator once `end_date` passes (core status, not owned by this
+  extension - see below). **Suspended**, **Removed**, and **Cancelled by
+  Member** are terminal.
+- **Expired -> Current.** Reactivates the membership directly, the same as
+  the manual "Approved" action elsewhere in the workflow.
+- **Grace, Denied, Not Fulfilled, Suspended, Removed, Cancelled by Member,
+  Deceased, anything else -> no action offered.** The "Membership Approval"
+  link doesn't even appear for these (see `architecture.md` -
+  `hook_civicrm_links`).
 
 ## Automatic transitions
 

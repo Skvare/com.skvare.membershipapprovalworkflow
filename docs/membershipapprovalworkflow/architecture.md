@@ -26,6 +26,26 @@ recursively creates/updates inherited memberships within the same API
 call (`createRelatedMemberships()`), so a simple "in progress" flag set
 and cleared once wouldn't survive re-entrancy correctly.
 
+## Membership type scoping
+
+`Utils::isMembershipTypeInWorkflow($membershipTypeId)` gates every place
+this extension imposes workflow behavior, based on the
+`membershipapprovalworkflow_membership_types` setting (a multi-select of
+membership types, configured on the settings screen below). An empty
+setting means "every type" - this is also the pre-setting behavior, so
+upgrading an existing site changes nothing until an administrator narrows
+the list.
+
+For a membership type left out of that list, this extension behaves as if
+it weren't installed: `forcePendingOnCreate()`,
+`preserveWorkflowStatusOnEdit()`, `preserveProtectedStatus()`, and
+`handleContributionCompleted()` all skip it, `hook_civicrm_links` never
+adds the "Membership Approval" row-action link for it, and
+`Form_Approve`/`applyAction()` reject a direct hit on the approval screen
+for it (`Utils::assertMembershipTypeInWorkflow()`, mirroring
+`assertPrimaryMembership()`) in case the link was already bookmarked
+before the type was removed from scope.
+
 ## Hook-by-hook reference
 
 All hooks are implemented in `membershipapprovalworkflow.php` and delegate
@@ -48,6 +68,8 @@ tab (`membership.selector.row`, `membership.tab.row` regions), pointing at
 
 - the membership is inherited (`owner_membership_id` set) - only the
   primary membership gets the link;
+- the membership's type is out of scope for this workflow (see "Membership
+  type scoping" above);
 - `Utils::getAllowedActions()` returns nothing for the membership's
   current status (i.e. the workflow is finished for this membership).
 
@@ -146,7 +168,7 @@ permission) is handled by `CRM_Membershipapprovalworkflow_Form_Approve`:
   - Under Review -> (Approved or Approved/Pending Payment) ->
     `sendUnderReviewApprovedNotification()`.
 
-## The notification settings screen
+## The settings screen
 
 `civicrm/admin/membershipapprovalworkflow` (also registered in
 `xml/Menu/membershipapprovalworkflow.xml`, requires `administer CiviCRM`,
@@ -154,11 +176,12 @@ linked from Administer > CiviMember via `hook_civicrm_navigationMenu()`)
 is handled by `CRM_Membershipapprovalworkflow_Form_Settings`, which adds no
 logic of its own - it extends core's `CRM_Admin_Form_Setting` directly.
 Everything (which fields appear, their defaults, saving them) is driven by
-the three `membershipapprovalworkflow_notify_*` settings in
-`settings/MembershipApprovalWorkflow.setting.php`, each tagged
+the settings in `settings/MembershipApprovalWorkflow.setting.php` tagged
 `'settings_pages' => ['membershipapprovalworkflow' => [...]]` - that key
 must match the last segment of this page's URL
 (`CRM_Admin_Form_SettingTrait::getSettingPageFilter()`), which is how the
-base class knows which settings belong on this particular page. Adding a
-fourth notification later is just adding a fourth setting with the same
-`settings_pages` key - no form code changes needed.
+base class knows which settings belong on this particular page:
+`membershipapprovalworkflow_membership_types` (see "Membership type
+scoping" above) plus the five `membershipapprovalworkflow_notify_*`
+notification toggles. Adding another setting later is just adding another
+entry with the same `settings_pages` key - no form code changes needed.
