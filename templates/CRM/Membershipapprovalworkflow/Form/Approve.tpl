@@ -5,6 +5,15 @@
     <div class="content">{$currentStatusLabel}</div>
   </div>
 
+  {literal}
+    <style type="text/css">
+      .crm-membershipapprovalworkflow-approve-form-block .crm-submit-buttons .crm-button,
+      .crm-membershipapprovalworkflow-approve-form-block .crm-submit-buttons > a.button { margin-left: 8px; }
+      .crm-membershipapprovalworkflow-approve-form-block .crm-submit-buttons .crm-button:first-child,
+      .crm-membershipapprovalworkflow-approve-form-block .crm-submit-buttons > a.button:first-child { margin-left: 0; }
+    </style>
+  {/literal}
+
   {if $statusSequence}
     {literal}
       <style type="text/css">
@@ -34,7 +43,6 @@
 
   {if $hasActions}
     <table class="form-layout">
-      {include file="CRM/common/formButtons.tpl" location="top"}
       <tr class="crm-membershipapprovalworkflow-form-block-approval_action">
         <td class="label">{$form.approval_action.label}</td>
         <td>{$form.approval_action.html}</td>
