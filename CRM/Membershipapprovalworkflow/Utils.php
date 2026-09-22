@@ -762,6 +762,7 @@ class CRM_Membershipapprovalworkflow_Utils {
     try {
       $result = CRM_Core_BAO_MessageTemplate::sendTemplate([
         'workflow' => 'membershipapprovalworkflow_under_review',
+        'from' => CRM_Core_BAO_Domain::getFromEmail(),
         'contactId' => $contactId,
         'toEmail' => $toEmail,
         'tplParams' => [
@@ -828,6 +829,7 @@ class CRM_Membershipapprovalworkflow_Utils {
     try {
       $result = CRM_Core_BAO_MessageTemplate::sendTemplate([
         'workflow' => 'membershipapprovalworkflow_under_review_approved',
+        'from' => CRM_Core_BAO_Domain::getFromEmail(),
         'contactId' => $contactId,
         'toEmail' => $toEmail,
         'tplParams' => [
@@ -886,6 +888,7 @@ class CRM_Membershipapprovalworkflow_Utils {
     try {
       $result = CRM_Core_BAO_MessageTemplate::sendTemplate([
         'workflow' => 'membershipapprovalworkflow_denied',
+        'from' => CRM_Core_BAO_Domain::getFromEmail(),
         'contactId' => $contactId,
         'toEmail' => $toEmail,
         'tplParams' => [
@@ -941,6 +944,7 @@ class CRM_Membershipapprovalworkflow_Utils {
     try {
       $result = CRM_Core_BAO_MessageTemplate::sendTemplate([
         'workflow' => 'membershipapprovalworkflow_not_fulfilled',
+        'from' => CRM_Core_BAO_Domain::getFromEmail(),
         'contactId' => $contactId,
         'toEmail' => $toEmail,
         'tplParams' => [
