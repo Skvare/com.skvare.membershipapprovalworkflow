@@ -26,12 +26,12 @@ membership record.
   status, and a "workflow sequence" help block showing where that status
   sits in the process:
   - Pending or Pending Approval/Payment Received -> Under Review
-  - Under Review -> Approved/Pending Payment **or** Approved (Current) -
+  - Under Review -> Approved/Pending Payment **or** Current -
     exactly one of the two is offered, based on whether payment has
     already been received
-  - Approved/Pending Payment -> Approved
+  - Approved/Pending Payment -> Current
   - Anything else (Current, Grace, Expired, ...) -> no action shown
-- Choosing **Approved** sets status to Current and start date to today.
+- Choosing **Current** sets status to Current and start date to today.
 - Each of the three status-changing actions above (moved to Under Review;
   approved, pending payment; approved and Current) sends the member an
   email notification, customizable from Administer > Communications >

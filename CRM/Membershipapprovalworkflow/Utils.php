@@ -469,7 +469,7 @@ class CRM_Membershipapprovalworkflow_Utils {
     if (!$paymentReceived) {
       $steps[] = [self::STATUS_APPROVED_PENDING_PAYMENT => E::ts('Approved/Pending Payment')];
     }
-    $steps[] = [self::STATUS_CURRENT => E::ts('Approved (Current)')];
+    $steps[] = [self::STATUS_CURRENT => E::ts('Current')];
     return $steps;
   }
 
@@ -587,7 +587,7 @@ class CRM_Membershipapprovalworkflow_Utils {
 
       case self::STATUS_UNDER_REVIEW:
         $actions = $paymentReceived
-          ? [self::ACTION_APPROVED => E::ts('Approved')]
+          ? [self::ACTION_APPROVED => E::ts('Current')]
           : [self::ACTION_APPROVED_PENDING_PAYMENT => E::ts('Approved/Pending Payment')];
         $actions[self::ACTION_DENIED] = E::ts('Denied');
         $actions[self::ACTION_NOT_FULFILLED] = E::ts('Not Fulfilled');
@@ -595,7 +595,7 @@ class CRM_Membershipapprovalworkflow_Utils {
 
       case self::STATUS_APPROVED_PENDING_PAYMENT:
         return [
-          self::ACTION_APPROVED => E::ts('Approved'),
+          self::ACTION_APPROVED => E::ts('Current'),
           self::ACTION_NOT_FULFILLED => E::ts('Not Fulfilled'),
           self::ACTION_UNDER_REVIEW => E::ts('Under Review'),
         ];

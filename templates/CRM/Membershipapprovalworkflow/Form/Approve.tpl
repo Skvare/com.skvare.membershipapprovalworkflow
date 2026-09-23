@@ -37,7 +37,7 @@
           {if !$smarty.foreach.seq.last}<span class="crm-membershipapprovalworkflow-sequence-arrow">&rarr;</span>{/if}
         {/foreach}
       </div>
-      <div>{ts}Only the action(s) valid from the current status are offered below. From Under Review, only one of "Approved/Pending Payment" or "Approved" is offered, depending on whether payment has already been received.{/ts}</div>
+      <div>{ts}Only the action(s) valid from the current status are offered below. From Under Review, only one of "Approved/Pending Payment" or "Current" is offered, depending on whether payment has already been received.{/ts}</div>
     </div>
   {/if}
 
