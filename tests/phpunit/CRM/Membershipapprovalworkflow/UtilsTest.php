@@ -23,6 +23,46 @@ class CRM_Membershipapprovalworkflow_UtilsTest extends \PHPUnit\Framework\TestCa
       ->apply();
   }
 
+  /**
+   * @var \CRM_Core_Transaction|null
+   */
+  private $tx;
+
+  /**
+   * PHPUnit 10+ dropped <listeners>, so Civi\Test\CiviTestListener never
+   * runs. Replicate what its startTest() does for HeadlessInterface and
+   * TransactionalInterface tests.
+   */
+  protected function setUp(): void {
+    parent::setUp();
+    $GLOBALS['CIVICRM_TEST_CASE'] = $this;
+    \CRM_Core_Session::singleton()->set('userID', NULL);
+
+    $this->setUpHeadless();
+
+    \Civi::rebuild(['system' => TRUE])->execute();
+    \Civi::reset();
+    \CRM_Core_Session::singleton()->set('userID', NULL);
+    $config = \CRM_Core_Config::singleton(TRUE, TRUE);
+    $config->userSystem->setMySQLTimeZone();
+
+    $this->tx = new \CRM_Core_Transaction(TRUE);
+    $this->tx->rollback();
+  }
+
+  /**
+   * Counterpart of CiviTestListener::endTest().
+   */
+  protected function tearDown(): void {
+    if ($this->tx) {
+      $this->tx->rollback()->commit();
+      $this->tx = NULL;
+    }
+    \CRM_Utils_Time::resetTime();
+    unset($GLOBALS['CIVICRM_TEST_CASE']);
+    parent::tearDown();
+  }
+
   public function testPrimaryMembershipIsAccepted(): void {
     CRM_Membershipapprovalworkflow_Utils::assertPrimaryMembership([
       'id' => 1,

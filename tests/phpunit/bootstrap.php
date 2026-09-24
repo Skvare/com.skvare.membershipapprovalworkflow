@@ -1,12 +1,15 @@
 <?php
 
 ini_set('memory_limit', '2G');
-ini_set('safe_mode', 0);
-putenv('CIVICRM_UF=UnitTests');
-putenv("CIVICRM_DSN='mysql://root:sunil@mysql8:3306/skvare11_naatp_civicrm_2_testing?new_link=true'");
-ini_set('CIVICRM_DSN', 'mysql://root:sunil@mysql8:3306/skvare11_naatp_civicrm_2_testing?new_link=true');
-eval(cv('php:boot --level=classloader', 'phpcode'));
 
+define('CIVICRM_TEST', 1);
+define('CIVICRM_UF', 'UnitTests');
+
+// PHPUnit 10+ ignores <listeners>, so Civi\Test\CiviTestListener::autoboot()
+// never runs; boot CiviCRM fully (CRM_Core_Config + DAO/DSN init) here.
+// phpcs:disable
+eval(cv('php:boot --level=full', 'phpcode'));
+// phpcs:enable
 // Allow autoloading of PHPUnit helper classes in this extension.
 $loader = new \Composer\Autoload\ClassLoader();
 $loader->add('CRM_', __DIR__);
