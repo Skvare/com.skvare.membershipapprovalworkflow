@@ -2,6 +2,7 @@
 
 use CRM_Membershipapprovalworkflow_ExtensionUtil as E;
 use Civi\Api4\Contribution;
+use Civi\Api4\FinancialTrxn;
 use Civi\Api4\Membership;
 use Civi\Api4\MembershipStatus;
 
@@ -156,16 +157,22 @@ class CRM_Membershipapprovalworkflow_Utils {
   }
 
   /**
-   * Update a membership through API4. skipStatusCal is an API3-only control
-   * and is intentionally omitted because API4 Membership.update does not run
-   * the legacy status calculator.
+   * Update a membership through API4.
+   *
+   * API4 Membership.update still runs CRM_Member_BAO_Membership::create()'s
+   * status-calculation block unless skipStatusCal is passed (API4 hands it
+   * through). Every caller sets status_id and computes its own dates, so that
+   * block would only reload empty dates from the database - undoing any date
+   * a caller clears, and warning "Undefined array key" for a membership that
+   * has none yet.
    *
    * @param array $params
    * @return array
    */
   private static function updateMembership(array $params) {
     $membershipId = $params['id'];
-    unset($params['id'], $params['skipStatusCal']);
+    unset($params['id']);
+    $params['skipStatusCal'] = TRUE;
     return Membership::update(FALSE)
       ->addWhere('id', '=', $membershipId)
       ->setValues($params)
@@ -1011,8 +1018,10 @@ class CRM_Membershipapprovalworkflow_Utils {
    * Move a freshly created "Pending" membership to "Pending Approval/
    * Payment Received" once its linked payment is received while it is
    * still awaiting staff review - i.e. the member paid at signup instead
-   * of choosing pay-later. Only the status changes; there is no start/end
-   * date yet since the membership still hasn't been approved.
+   * of choosing pay-later. There is no start/end date yet since the
+   * membership still hasn't been approved - which also undoes the dates
+   * core's order completion (Civi\Membership\OrderCompleteSubscriber) wrote
+   * just before this runs.
    *
    * Never lets a failure propagate - see markCurrentOnPayment(); this is
    * reachable from the same hook_civicrm_post call chain.
@@ -1030,6 +1039,8 @@ class CRM_Membershipapprovalworkflow_Utils {
         'is_override' => 0,
         'status_override_end_date' => '',
         'status_id' => self::getStatusIdByName(self::STATUS_PENDING_APPROVAL_PAYMENT_RECEIVED),
+        'start_date' => NULL,
+        'end_date' => NULL,
       ];
       return self::runWorkflowUpdate(static function () use ($params) {
         return self::updateMembership($params);
@@ -1171,7 +1182,7 @@ class CRM_Membershipapprovalworkflow_Utils {
     if (!$contribution) {
       throw new CRM_Core_Exception(E::ts('Contribution %1 was not found.', [1 => $contributionId]));
     }
-    $paymentDate = $contribution['receive_date'];
+    $paymentDate = self::getLatestPaymentDate($contributionId) ?? $contribution['receive_date'];
 
     $membershipIds = self::getMembershipPaymentLinkedIds('contribution_id', $contributionId, 'membership_id');
     foreach ($membershipIds as $membershipId) {
@@ -1187,6 +1198,33 @@ class CRM_Membershipapprovalworkflow_Utils {
         self::markPendingApprovalPaymentReceived($membershipId);
       }
     }
+  }
+
+  /**
+   * Date of a contribution's most recent payment - the one that completed it.
+   *
+   * Not the contribution's receive_date: a pay-later contribution keeps its
+   * signup date there when it is paid later (e.g. staff "Record Payment").
+   *
+   * @param int $contributionId
+   * @return string|NULL
+   *   NULL if the contribution has no payment recorded.
+   */
+  private static function getLatestPaymentDate($contributionId) {
+    $payment = FinancialTrxn::get(FALSE)
+      ->addSelect('trxn_date')
+      ->addJoin('EntityFinancialTrxn AS entity_financial_trxn', 'INNER', [
+        'entity_financial_trxn.financial_trxn_id', '=', 'id',
+      ])
+      ->addWhere('entity_financial_trxn.entity_table', '=', 'civicrm_contribution')
+      ->addWhere('entity_financial_trxn.entity_id', '=', $contributionId)
+      ->addWhere('is_payment', '=', TRUE)
+      ->addOrderBy('trxn_date', 'DESC')
+      ->addOrderBy('id', 'DESC')
+      ->setLimit(1)
+      ->execute()
+      ->first();
+    return $payment['trxn_date'] ?? NULL;
   }
 
   /**
