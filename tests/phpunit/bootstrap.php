@@ -5,14 +5,19 @@ ini_set('memory_limit', '2G');
 define('CIVICRM_TEST', 1);
 define('CIVICRM_UF', 'UnitTests');
 
-// PHPUnit 10+ ignores <listeners>, so Civi\Test\CiviTestListener::autoboot()
-// never runs; boot CiviCRM fully (CRM_Core_Config + DAO/DSN init) here.
+// Load settings only, as core's tests/phpunit/CiviTest/bootstrap.php does: a
+// full boot needs CiviCRM's tables, but on a fresh CI database they don't
+// exist yet. CiviUnitTestCase::setUpBeforeClass() installs them, then boots.
 // phpcs:disable
-eval(cv('php:boot --level=full', 'phpcode'));
+eval(cv('php:boot --level=settings', 'phpcode'));
 // phpcs:enable
 // Allow autoloading of PHPUnit helper classes in this extension.
 $loader = new \Composer\Autoload\ClassLoader();
 $loader->add('CRM_', __DIR__);
+// ...and the extension's own classes. PHPUnit reads them while collecting
+// tests (e.g. constants in data providers) - on a fresh database that is
+// before CiviCRM has installed the extension and registered its classloader.
+$loader->add('CRM_', dirname(__DIR__, 2));
 $loader->add('Civi\\', __DIR__);
 $loader->add('api_', __DIR__);
 $loader->add('api\\', __DIR__);
